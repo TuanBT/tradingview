@@ -1,72 +1,195 @@
 //@version=6
-indicator("M15 Impulse FVG Entry", overlay=true, max_labels_count=500)
-atrLen       = input.int(14, "ATR Len (M15)", minval=1)
-atrMult      = input.float(1.2, "ATR Mult", step=0.05)
-bodyRatioMin = input.float(0.55, "Min Body/Range", step=0.05)
+indicator(
+     "M15 Impulse FVG Entry",
+     overlay = true,
+     max_labels_count = 500
+)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+atrLen       = input.int(14,  "ATR Length (M15)", minval = 1)
+atrMult      = input.float(1.2, "ATR Multiplier", step = 0.05)
+bodyRatioMin = input.float(0.55, "Min Body / Range", step = 0.05)
+
+// Visual settings
 zoneColor = color.new(color.gray, 0)
 m15Color  = color.new(color.gray, 0)
 sigColor  = color.new(color.fuchsia, 0)
+
+// Padding used for IN label placement
 pad = ta.atr(14) * 0.10
+
+// ============================================================================
+// M15 IMPULSE DETECTION (RUNS ON M15 VIA request.security)
+// ============================================================================
 f_m15() =>
+    // Zone high / low are persistent until next impulse
     var float zH = na
     var float zL = na
+
+    // Candle characteristics
     rng = high - low
     atr = ta.atr(atrLen)
-    br  = rng > 0 ? math.abs(close - open) / rng : 0.0
-    imp = barstate.isconfirmed and rng >= atrMult * atr and br >= bodyRatioMin
+    bodyRatio = rng > 0 ? math.abs(close - open) / rng : 0.0
+
+    // Impulse condition:
+    // - Confirmed M15 close
+    // - ATR expansion
+    // - Strong body
+    imp = barstate.isconfirmed and
+          rng >= atrMult * atr and
+          bodyRatio >= bodyRatioMin
+
     if imp
         zH := high
         zL := low
+
+    // Return impulse zone and timestamp
     [zH, zL, imp, time]
-[zoneH, zoneL, m15Imp, m15T] = request.security(syminfo.tickerid, "15", f_m15())
-newM15 = m15T != m15T[1]
-showM15 = m15Imp and newM15
-plotshape(showM15, "M15", text="M15", style=shape.triangledown, location=location.abovebar,
-     size=size.small, color=m15Color, textcolor=m15Color)
-plot(zoneH, "Zone High", style=plot.style_line, linewidth=1, color=zoneColor)
-plot(zoneL, "Zone Low",  style=plot.style_line, linewidth=1, color=zoneColor)
-inZone = not na(zoneH) and not na(zoneL) and high < zoneH and low > zoneL
+
+// Execute M15 logic on 15m timeframe
+[zoneH, zoneL, m15Impulse, m15Time] = request.security(syminfo.tickerid, "15", f_m15())
+
+// Detect new M15 impulse bar
+newM15  = m15Time != m15Time[1]
+showM15 = m15Impulse and newM15
+
+// Plot M15 impulse marker
+plotshape(
+     showM15,
+     title = "M15 Impulse",
+     text = "M15",
+     style = shape.triangledown,
+     location = location.abovebar,
+     size = size.small,
+     color = m15Color,
+     textcolor = m15Color
+)
+
+// Plot impulse decision zone
+plot(zoneH, "Zone High", linewidth = 1, color = zoneColor)
+plot(zoneL, "Zone Low",  linewidth = 1, color = zoneColor)
+
+// ============================================================================
+// CONTEXT STATE MANAGEMENT
+// ============================================================================
+var bool hasM15Context = false
+
+// Once a M15 impulse appears, context becomes active
+if showM15
+    hasM15Context := true
+
+// ============================================================================
+// IN / OUT LOGIC (RUNS ON CURRENT CHART TIMEFRAME, e.g. M5)
+// ============================================================================
+
+// Candle fully inside impulse zone
+inZone = not na(zoneH) and not na(zoneL) and high < zoneH and low  > zoneL
+
+// Previous close already outside zone (clean break requirement)
 prevUp   = not na(zoneH) and close[1] > zoneH
 prevDown = not na(zoneL) and close[1] < zoneL
-outUp   = not na(zoneH) and close > zoneH and low > zoneH and prevUp
+
+// Current breakout conditions
+outUp   = not na(zoneH) and close > zoneH and low  > zoneH and prevUp
 outDown = not na(zoneL) and close < zoneL and high < zoneL and prevDown
-var bool waitingIN  = false
-var bool waitingOUT = false
-var int  inIdx      = na
-var float inH       = na
-var float inL       = na
-var float minL      = na
-var float maxH      = na
-var int  m15Bar     = na
+
+// State variables
+var bool  waitingIN  = false
+var bool  waitingOUT = false
+var int   inIndex    = na
+var float inHigh     = na
+var float inLow      = na
+var float minLow     = na
+var float maxHigh    = na
+var int   m15BarIdx  = na
+
+// Reset state when new M15 impulse appears
 if showM15
-    m15Bar := bar_index
-    waitingIN := true
+    m15BarIdx  := bar_index
+    waitingIN  := true
     waitingOUT := false
-    inIdx := na
-    inH := na
-    inL := na
-    minL := na
-    maxH := na
-canIN = waitingIN and not na(m15Bar) and bar_index > m15Bar
+    inIndex    := na
+    inHigh     := na
+    inLow      := na
+    minLow     := na
+    maxHigh    := na
+
+// Only allow IN after the impulse bar
+canIN = waitingIN and not na(m15BarIdx) and bar_index > m15BarIdx
+
+// Capture first valid IN candle
 if canIN and inZone
-    inIdx := bar_index
-    inH := high
-    inL := low
-    minL := low
-    maxH := high
-    waitingIN := false
+    inIndex := bar_index
+    inHigh  := high
+    inLow   := low
+    minLow  := low
+    maxHigh := high
+    waitingIN  := false
     waitingOUT := true
-if waitingOUT and not na(inIdx)
-    minL := math.min(minL, low)
-    maxH := math.max(maxH, high)
-noRevBuy  = waitingOUT and not na(inIdx) and minL >= inL
-noRevSell = waitingOUT and not na(inIdx) and maxH <= inH
-outBuy  = waitingOUT and outUp   and low  > inH and noRevBuy
-outSell = waitingOUT and outDown and high < inL and noRevSell
-outSig  = outBuy or outSell
-plotshape(outSig, "OUT", text="OUT", style=shape.triangledown, location=location.abovebar,
-     size=size.tiny, color=sigColor, textcolor=sigColor)
-if outSig
-    label.new(inIdx, inH + pad, "IN", xloc=xloc.bar_index, style=label.style_none,
-        textcolor=sigColor, size=size.small)
-    waitingOUT := false
+
+// Track extremes after IN candle
+if waitingOUT and not na(inIndex)
+    minLow  := math.min(minLow, low)
+    maxHigh := math.max(maxHigh, high)
+
+// No reversal through IN candle extremes
+noRevBuy  = waitingOUT and minLow  >= inLow
+noRevSell = waitingOUT and maxHigh <= inHigh
+
+// OUT conditions (confirmed on bar close)
+barClose = barstate.isconfirmed
+
+outBuy  = barClose and waitingOUT and outUp   and low  > inHigh and noRevBuy
+outSell = barClose and waitingOUT and outDown and high < inLow  and noRevSell
+
+outSignal = outBuy or outSell
+
+// Plot OUT marker
+plotshape(
+     outSignal,
+     title = "OUT",
+     text = "OUT",
+     style = shape.triangledown,
+     location = location.abovebar,
+     size = size.tiny,
+     color = sigColor,
+     textcolor = sigColor
+)
+
+// Draw IN label once OUT appears
+if outSignal
+    label.new(
+        inIndex,
+        inHigh + pad,
+        "IN",
+        xloc = xloc.bar_index,
+        style = label.style_none,
+        textcolor = sigColor,
+        size = size.small
+    )
+
+    // Reset context after successful OUT
+    waitingOUT     := false
+    hasM15Context  := false
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Alert 1: M15 impulse appears (context established)
+alertcondition(
+     showM15,
+     title   = "M15",
+     message = "M15 Impulse detected on {{ticker}} (TF=M15)"
+)
+
+// Alert 2: OUT appears after M15 impulse context
+outEvent = barClose and outSignal and hasM15Context
+
+alertcondition(
+     outEvent,
+     title   = "OUT",
+     message = "M15 Impulse FVG Entry: OUT on {{ticker}} (TF={{interval}}) @ {{close}}"
+)
