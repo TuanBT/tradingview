@@ -1,0 +1,45 @@
+M15 Impulse FVG Entry
+
+M15 Impulse FVG Entry is a minimalist price-action tool designed to highlight structured entry contexts using impulse candles, decision zones, and Fair Value Gap (FVG) logic.
+
+⸻
+
+Core Logic
+
+1. M15 Impulse Candle
+A strong M15 candle is identified using ATR expansion and body-to-range ratio.
+This candle defines a decision zone (High / Low).
+
+2. IN Candle
+Only the first candle that forms fully inside the decision zone after the M15 impulse is considered.
+This candle acts as the structural reference.
+
+3. OUT Candle
+Price must break cleanly outside the zone.
+The previous candle must already close outside the zone.
+No reversal is allowed through the IN candle extreme.
+
+4. FVG Entry Context
+The gap between the IN candle and the OUT candle forms the Fair Value Gap.
+A midpoint between IN and OUT can be used as a potential entry reference.
+
+⸻
+
+What This Script Shows
+
+• M15 — Impulse candle marker
+• Zone — High / Low of the impulse candle
+• IN — First valid candle inside the zone
+• OUT — Valid breakout candle
+
+⸻
+
+Design Philosophy
+
+• No BUY / SELL bias
+• No alerts, no automation
+• No indicator stacking
+• Clean and chart-friendly
+
+This script provides market context and structure only.
+Risk management and execution rules remain the trader’s responsibility.

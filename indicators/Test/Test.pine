@@ -1,0 +1,43 @@
+//@version=6
+// ─────────────────────────────────────────────
+// Indicator: Simple Test V6
+// ID       : simple_test_v6
+// Version  : v0.1.0
+// Purpose  : Minimal indicator to test Pine v6 setup.
+// ─────────────────────────────────────────────
+indicator(
+     title      = "Simple Test",
+     shorttitle = "simple_test",
+     overlay    = true
+)
+
+// ───── Inputs
+len = input.int(20, "SMA Length", minval=1)
+showMark = input.bool(true, "Show mark")
+
+// ───── Core logic
+smaVal = ta.sma(close, len)
+isAbove = close > smaVal
+isBelow = close < smaVal
+
+// ───── Plot
+plot(smaVal, title="SMA", linewidth=2)
+
+// ───── Marks
+plotshape(
+     showMark and isAbove,
+     title     = "Above SMA",
+     style     = shape.circle,
+     location  = location.belowbar,
+     size      = size.tiny,
+     text      = "A"
+)
+
+plotshape(
+     showMark and isBelow,
+     title     = "Below SMA",
+     style     = shape.circle,
+     location  = location.abovebar,
+     size      = size.tiny,
+     text      = "B"
+)

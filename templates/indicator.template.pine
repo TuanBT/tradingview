@@ -1,0 +1,48 @@
+//@version=5
+// ─────────────────────────────────────────────────────────────────────────────
+// Indicator: <NAME>
+// ID       : <SHORT_ID>
+// Version  : v0.1.0
+// Author   : <YOU>
+// Purpose  : <1–2 lines: what it shows/helps you do>
+// Notes    : <limits, repaint behavior, intended TF/symbols>
+// ─────────────────────────────────────────────────────────────────────────────
+indicator(title="<NAME> [<SHORT_ID>] v0.1.0", shorttitle="<SHORT_ID> v0.1.0", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// A) Inputs
+groupCore   = "Core"
+groupStyle  = "Style"
+groupAlerts = "Alerts"
+
+src      = input.source(close, "Source", group=groupCore)
+len      = input.int(14, "Length", minval=1, group=groupCore)
+useHTF   = input.bool(false, "Use HTF", group=groupCore)
+htf      = input.timeframe("60", "HTF", group=groupCore)
+
+showDebug = input.bool(false, "Show debug", group=groupStyle)
+showMarks = input.bool(true, "Show marks", group=groupStyle)
+
+enableAlerts = input.bool(true, "Enable alerts", group=groupAlerts)
+
+// B) Data (MTF-safe)
+f_getSrc(_src) =>
+    useHTF ? request.security(syminfo.tickerid, htf, _src, barmerge.gaps_off, barmerge.lookahead_off) : _src
+
+x = f_getSrc(src)
+
+// C) Core logic
+basis = ta.sma(x, len)
+signalLong  = ta.crossover(x, basis)
+signalShort = ta.crossunder(x, basis)
+
+// D) Plotting / UI
+plot(basis, title="Basis")
+plotshape(showMarks and signalLong,  title="Long mark",  style=shape.triangleup,   location=location.belowbar, text="L", size=size.tiny)
+plotshape(showMarks and signalShort, title="Short mark", style=shape.triangledown, location=location.abovebar, text="S", size=size.tiny)
+
+if showDebug
+    label.new(bar_index, high, "x=" + str.tostring(x) + "\nbasis=" + str.tostring(basis), style=label.style_label_left)
+
+// E) Alerts
+alertcondition(enableAlerts and signalLong,  title="Long",  message="<SHORT_ID> Long on {{ticker}} @ {{close}}")
+alertcondition(enableAlerts and signalShort, title="Short", message="<SHORT_ID> Short on {{ticker}} @ {{close}}")

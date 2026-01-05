@@ -1,0 +1,72 @@
+//@version=6
+indicator("M15 Impulse FVG Entry", overlay=true, max_labels_count=500)
+atrLen       = input.int(14, "ATR Len (M15)", minval=1)
+atrMult      = input.float(1.2, "ATR Mult", step=0.05)
+bodyRatioMin = input.float(0.55, "Min Body/Range", step=0.05)
+zoneColor = color.new(color.gray, 0)
+m15Color  = color.new(color.gray, 0)
+sigColor  = color.new(color.fuchsia, 0)
+pad = ta.atr(14) * 0.10
+f_m15() =>
+    var float zH = na
+    var float zL = na
+    rng = high - low
+    atr = ta.atr(atrLen)
+    br  = rng > 0 ? math.abs(close - open) / rng : 0.0
+    imp = barstate.isconfirmed and rng >= atrMult * atr and br >= bodyRatioMin
+    if imp
+        zH := high
+        zL := low
+    [zH, zL, imp, time]
+[zoneH, zoneL, m15Imp, m15T] = request.security(syminfo.tickerid, "15", f_m15())
+newM15 = m15T != m15T[1]
+showM15 = m15Imp and newM15
+plotshape(showM15, "M15", text="M15", style=shape.triangledown, location=location.abovebar,
+     size=size.small, color=m15Color, textcolor=m15Color)
+plot(zoneH, "Zone High", style=plot.style_line, linewidth=1, color=zoneColor)
+plot(zoneL, "Zone Low",  style=plot.style_line, linewidth=1, color=zoneColor)
+inZone = not na(zoneH) and not na(zoneL) and high < zoneH and low > zoneL
+prevUp   = not na(zoneH) and close[1] > zoneH
+prevDown = not na(zoneL) and close[1] < zoneL
+outUp   = not na(zoneH) and close > zoneH and low > zoneH and prevUp
+outDown = not na(zoneL) and close < zoneL and high < zoneL and prevDown
+var bool waitingIN  = false
+var bool waitingOUT = false
+var int  inIdx      = na
+var float inH       = na
+var float inL       = na
+var float minL      = na
+var float maxH      = na
+var int  m15Bar     = na
+if showM15
+    m15Bar := bar_index
+    waitingIN := true
+    waitingOUT := false
+    inIdx := na
+    inH := na
+    inL := na
+    minL := na
+    maxH := na
+canIN = waitingIN and not na(m15Bar) and bar_index > m15Bar
+if canIN and inZone
+    inIdx := bar_index
+    inH := high
+    inL := low
+    minL := low
+    maxH := high
+    waitingIN := false
+    waitingOUT := true
+if waitingOUT and not na(inIdx)
+    minL := math.min(minL, low)
+    maxH := math.max(maxH, high)
+noRevBuy  = waitingOUT and not na(inIdx) and minL >= inL
+noRevSell = waitingOUT and not na(inIdx) and maxH <= inH
+outBuy  = waitingOUT and outUp   and low  > inH and noRevBuy
+outSell = waitingOUT and outDown and high < inL and noRevSell
+outSig  = outBuy or outSell
+plotshape(outSig, "OUT", text="OUT", style=shape.triangledown, location=location.abovebar,
+     size=size.tiny, color=sigColor, textcolor=sigColor)
+if outSig
+    label.new(inIdx, inH + pad, "IN", xloc=xloc.bar_index, style=label.style_none,
+        textcolor=sigColor, size=size.small)
+    waitingOUT := false
