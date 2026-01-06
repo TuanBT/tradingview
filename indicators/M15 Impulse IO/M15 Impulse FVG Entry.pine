@@ -16,6 +16,9 @@ bodyRatioMin = input.float(0.55, "Min Body / Range", step = 0.05)
 zoneColor = color.new(color.gray, 0)
 m15Color  = color.new(color.gray, 0)
 sigColor  = color.new(color.purple, 0)
+buyColor  = color.new(color.green, 0)
+sellColor = color.new(color.red, 0)
+textcolor = color.new(color.white, 0)
 
 // Padding used for IN label placement
 pad = ta.atr(14) * 0.10
@@ -146,16 +149,27 @@ outSell = barClose and waitingOUT and outDown and high < inLow  and noRevSell
 
 outSignal = outBuy or outSell
 
-// Plot OUT marker
+// Plot OUT markers per direction
 plotshape(
-     outSignal,
-     title = "OUT",
-     text = "OUT",
-     style = shape.triangledown,
+     outBuy,
+     title = "OUT Buy",
+     text = "B",
+     style = shape.labelup,
+     location = location.belowbar,
+     size = size.tiny,
+     color = buyColor,
+     textcolor = textcolor
+)
+
+plotshape(
+     outSell,
+     title = "OUT Sell",
+     text = "S",
+     style = shape.labeldown,
      location = location.abovebar,
      size = size.tiny,
-     color = sigColor,
-     textcolor = sigColor
+     color = sellColor,
+     textcolor = textcolor
 )
 
 // Draw IN label once OUT appears
