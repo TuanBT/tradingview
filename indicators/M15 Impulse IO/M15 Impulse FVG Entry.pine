@@ -15,7 +15,7 @@ bodyRatioMin = input.float(0.55, "Min Body / Range", step = 0.05)
 // Visual settings
 zoneColor = color.new(color.gray, 0)
 m15Color  = color.new(color.gray, 0)
-sigColor  = color.new(color.fuchsia, 0)
+sigColor  = color.new(color.purple, 0)
 
 // Padding used for IN label placement
 pad = ta.atr(14) * 0.10
@@ -173,6 +173,68 @@ if outSignal
     // Reset context after successful OUT
     waitingOUT     := false
     hasM15Context  := false
+
+// ============================================================================
+// OX + MIDLINE (IN <-> OUT)
+// ============================================================================
+
+var box  ioBox   = na
+var line ioMidLn = na
+
+if outSignal
+    float top    = na
+    float bottom = na
+
+    if outBuy
+        top    := low
+        bottom := inHigh
+    if outSell
+        top    := inLow
+        bottom := high
+
+    // Draw rectangle IN -> OUT
+    ioBox := box.new(
+        left = inIndex,
+        top = top,
+        right = bar_index,
+        bottom = bottom,
+        xloc = xloc.bar_index,
+        bgcolor = color.new(sigColor, 85),
+        border_color = sigColor,
+        border_width = 0
+    )
+
+    // Border TOP (dashed)
+    line.new(
+        x1 = inIndex, y1 = top,
+        x2 = bar_index, y2 = top,
+        xloc = xloc.bar_index,
+        color = color.new(sigColor, 40),
+        width = 1,
+        style = line.style_dashed
+    )
+
+    // Border BOTTOM (dashed)
+    line.new(
+        x1 = inIndex, y1 = bottom,
+        x2 = bar_index, y2 = bottom,
+        xloc = xloc.bar_index,
+        color = color.new(sigColor, 40),
+        width = 1,
+        style = line.style_dashed
+    )
+
+    // Draw a line in the middle of the box.
+    float mid = (top + bottom) / 2.0
+    ioMidLn := line.new(
+        x1 = inIndex, y1 = mid,
+        x2 = bar_index, y2 = mid,
+        xloc = xloc.bar_index,
+        extend = extend.none,
+        color = sigColor,
+        width = 1,
+        style = line.style_dotted
+    )
 
 // ============================================================================
 // ALERTS
