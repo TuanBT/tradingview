@@ -178,18 +178,16 @@ if outSignal
 // ALERTS
 // ============================================================================
 
-// Alert 1: M15 impulse appears (context established)
+// Alert 1: OUT appears after M15 impulse context
+alertcondition(
+     outSignal,
+     title   = "OUT",
+     message = "M15 Impulse FVG Entry: OUT on {{ticker}} (TF={{interval}})"
+)
+
+// Alert 2: M15 impulse appears (context established)
 alertcondition(
      showM15,
      title   = "M15",
      message = "M15 Impulse detected on {{ticker}} (TF=M15)"
-)
-
-// Alert 2: OUT appears after M15 impulse context
-outEvent = barClose and outSignal and hasM15Context
-
-alertcondition(
-     outEvent,
-     title   = "OUT",
-     message = "M15 Impulse FVG Entry: OUT on {{ticker}} (TF={{interval}}) @ {{close}}"
 )
