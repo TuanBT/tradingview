@@ -228,5 +228,6 @@ if not na(activeSLLbl)
 // ============================================================================
 // E) ALERTS
 // ============================================================================
-alertcondition(breakUp,   title = "HH Break (Bullish)", message = "PA Break: HH breakout on {{ticker}} @ {{close}}")
-alertcondition(breakDown, title = "LL Break (Bearish)",  message = "PA Break: LL breakout on {{ticker}} @ {{close}}")
+alertcondition(breakUp,              title = "Break Buy",        message = "PA Break: BUY breakout on {{ticker}} @ {{close}}")
+alertcondition(breakDown,            title = "Break Sell",       message = "PA Break: SELL breakout on {{ticker}} @ {{close}}")
+alertcondition(breakUp or breakDown, title = "Any Break",        message = "PA Break: Breakout on {{ticker}} @ {{close}}")
