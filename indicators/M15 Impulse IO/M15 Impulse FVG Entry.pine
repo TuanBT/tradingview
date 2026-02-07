@@ -192,7 +192,7 @@ if outSignal
 // OX + MIDLINE (IN <-> OUT)
 // ============================================================================
 
-var box  ioBox   = na
+
 var line ioMidLn = na
 
 if outSignal
@@ -205,18 +205,6 @@ if outSignal
     if outSell
         top    := inLow
         bottom := high
-
-    // Draw rectangle IN -> OUT
-    ioBox := box.new(
-        left = inIndex,
-        top = top,
-        right = bar_index,
-        bottom = bottom,
-        xloc = xloc.bar_index,
-        bgcolor = color.new(sigColor, 85),
-        border_color = sigColor,
-        border_width = 0
-    )
 
     // Border TOP (dashed)
     line.new(
@@ -255,15 +243,16 @@ if outSignal
 // ============================================================================
 
 // Alert 1: OUT appears after M15 impulse context
+outEvent = outSignal and not outSignal[1]
 alertcondition(
-     outSignal,
-     title   = "OUT",
-     message = "M15 Impulse FVG Entry: OUT on {{ticker}} (TF={{interval}})"
+     outEvent,
+     title   = "B/S OUT",
+     message = "M15 Impulse FVG Entry OUT on {{ticker}} (TF={{interval}})"
 )
 
 // Alert 2: M15 impulse appears (context established)
 alertcondition(
      showM15,
      title   = "M15",
-     message = "M15 Impulse detected on {{ticker}} (TF=M15)"
+     message = "M15 Impulse FVG Entry: M15 Impulse {{ticker}} (TF=M15)"
 )

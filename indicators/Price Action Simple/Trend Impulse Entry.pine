@@ -1,0 +1,212 @@
+//@version=6
+indicator(
+    "Trend Impulse Entry - Simple BUY/SELL",
+    overlay = true,
+    max_labels_count = 500,
+    max_lines_count = 500,
+    max_boxes_count = 100
+)
+
+// ============================================================================
+// TREND IMPULSE ENTRY
+// Simple BUY/SELL signals with Entry, SL, TP visualization
+// 
+// Logic:
+// - BUY: Uptrend + Bull Impulse + Higher High confirmed
+// - SELL: Downtrend + Bear Impulse + Lower Low confirmed
+// 
+// Visual: 3 lines per signal (Entry=Blue, SL=Red, TP=Teal)
+// ============================================================================
+
+// INPUTS
+string GRP_SIGNAL = "Signal"
+pivotLen = input.int(5, "Pivot Lookback", minval = 2, maxval = 20, group = GRP_SIGNAL)
+impulseATR = input.float(1.5, "Impulse Size (ATR)", minval = 1.0, step = 0.1, group = GRP_SIGNAL)
+rrRatio = input.float(3.0, "R:R Ratio", minval = 1.5, step = 0.5, group = GRP_SIGNAL)
+minRiskATR = input.float(1.0, "Min Risk (ATR)", minval = 0.5, step = 0.25, group = GRP_SIGNAL)
+trendEMA = input.int(50, "EMA Period (Trend)", minval = 10, maxval = 200, group = GRP_SIGNAL)
+
+string GRP_VISUAL = "Display"
+showEMA = input.bool(false, "Show EMA", group = GRP_VISUAL)
+showSwings = input.bool(false, "Show Swing Points", group = GRP_VISUAL)
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+ema = ta.ema(close, trendEMA)
+atr = ta.atr(14)
+
+// Trend
+uptrend = close > ema and close[1] > ema and close[2] > ema
+downtrend = close < ema and close[1] < ema and close[2] < ema
+
+// Plot EMA (optional)
+plot(showEMA ? ema : na, "EMA", color = color.gray, linewidth = 1)
+
+// ============================================================================
+// IMPULSE DETECTION
+// ============================================================================
+candleRange = high - low
+isLargeCandle = candleRange >= atr * impulseATR
+isBullishCandle = close > open
+isBearishCandle = close < open
+
+bullImpulse = isLargeCandle and isBullishCandle and uptrend
+bearImpulse = isLargeCandle and isBearishCandle and downtrend
+
+// ============================================================================
+// SWING DETECTION  
+// ============================================================================
+swingHigh = ta.pivothigh(high, pivotLen, pivotLen)
+swingLow = ta.pivotlow(low, pivotLen, pivotLen)
+
+// Show swing points (optional)
+plotshape(showSwings and not na(swingHigh), "Swing High", shape.triangledown, 
+          location.abovebar, color.new(color.red, 50), offset = -pivotLen, size = size.tiny)
+plotshape(showSwings and not na(swingLow), "Swing Low", shape.triangleup, 
+          location.belowbar, color.new(color.green, 50), offset = -pivotLen, size = size.tiny)
+
+var float lastHigh = na
+var float lastLow = na
+var float prevHigh = na
+var float prevLow = na
+
+if not na(swingHigh)
+    prevHigh := lastHigh
+    lastHigh := swingHigh
+    
+if not na(swingLow)
+    prevLow := lastLow
+    lastLow := swingLow
+
+// Higher High / Lower Low confirmation
+higherHigh = not na(lastHigh) and not na(prevHigh) and lastHigh > prevHigh
+lowerLow = not na(lastLow) and not na(prevLow) and lastLow < prevLow
+
+// ============================================================================
+// STATE MACHINE - Track signals
+// ============================================================================
+var bool hadBullImpulse = false
+var bool hadBearImpulse = false
+var float impulseHigh = na
+var float impulseLow = na
+
+// Record impulse
+if bullImpulse
+    hadBullImpulse := true
+    impulseLow := low  // Key level for buy
+    impulseHigh := high
+    hadBearImpulse := false  // Reset opposite
+
+if bearImpulse
+    hadBearImpulse := true
+    impulseHigh := high  // Key level for sell
+    impulseLow := low
+    hadBullImpulse := false  // Reset opposite
+
+// ============================================================================
+// SIGNAL GENERATION
+// ============================================================================
+var bool waitingForBuy = false
+var bool waitingForSell = false
+var float buyEntry = na
+var float buySL = na
+var float buyTP = na
+var float sellEntry = na
+var float sellSL = na
+var float sellTP = na
+
+// Generate BUY signal: Uptrend + Had Bull Impulse + Confirmed Higher High
+buySetup = uptrend and hadBullImpulse and higherHigh
+
+if buySetup and not waitingForBuy
+    float potentialEntry = prevHigh  // Entry at previous high (broken level)
+    float potentialSL = impulseLow - (atr * 0.2)  // SL below impulse key level
+    float risk = potentialEntry - potentialSL
+    
+    // Only create signal if risk is large enough (filter weak setups)
+    if risk > 0 and risk >= (atr * minRiskATR)
+        waitingForBuy := true
+        buyEntry := potentialEntry
+        buySL := potentialSL
+        buyTP := buyEntry + (risk * rrRatio)
+        hadBullImpulse := false
+        waitingForSell := false
+
+// Generate SELL signal: Downtrend + Had Bear Impulse + Confirmed Lower Low
+sellSetup = downtrend and hadBearImpulse and lowerLow
+
+if sellSetup and not waitingForSell
+    float potentialEntry = prevLow  // Entry at previous low (broken level)
+    float potentialSL = impulseHigh + (atr * 0.2)  // SL above impulse key level
+    float risk = potentialSL - potentialEntry
+    
+    // Only create signal if risk is large enough (filter weak setups)
+    if risk > 0 and risk >= (atr * minRiskATR)
+        waitingForSell := true
+        sellEntry := potentialEntry
+        sellSL := potentialSL
+        sellTP := sellEntry - (risk * rrRatio)
+        hadBearImpulse := false
+        waitingForBuy := false
+
+// ============================================================================
+// ENTRY TRIGGERS - Simple: Lines + Label
+// ============================================================================
+buyTriggered = waitingForBuy and not na(buyEntry) and low <= buyEntry and close > buySL
+sellTriggered = waitingForSell and not na(sellEntry) and high >= sellEntry and close < sellSL
+
+// Line length for backtest visualization
+int lineLen = 20
+
+if buyTriggered
+    // Signal label
+    label.new(bar_index, low, "BUY", style = label.style_label_up, 
+             color = color.green, textcolor = color.white, size = size.small)
+    
+    // 3 lines with small text labels
+    line.new(bar_index, buyEntry, bar_index + lineLen, buyEntry, color = color.blue, width = 2)
+    label.new(bar_index + lineLen + 1, buyEntry, "Entry", style = label.style_none, 
+             textcolor = color.blue, size = size.tiny)
+    
+    line.new(bar_index, buySL, bar_index + lineLen, buySL, color = color.red, width = 1)
+    label.new(bar_index + lineLen + 1, buySL, "SL", style = label.style_none, 
+             textcolor = color.red, size = size.tiny)
+    
+    line.new(bar_index, buyTP, bar_index + lineLen, buyTP, color = color.teal, width = 1)
+    label.new(bar_index + lineLen + 1, buyTP, "TP", style = label.style_none, 
+             textcolor = color.teal, size = size.tiny)
+    
+    waitingForBuy := false
+
+if sellTriggered
+    // Signal label
+    label.new(bar_index, high, "SELL", style = label.style_label_down, 
+             color = color.red, textcolor = color.white, size = size.small)
+    
+    // 3 lines with small text labels
+    line.new(bar_index, sellEntry, bar_index + lineLen, sellEntry, color = color.blue, width = 2)
+    label.new(bar_index + lineLen + 1, sellEntry, "Entry", style = label.style_none, 
+             textcolor = color.blue, size = size.tiny)
+    
+    line.new(bar_index, sellSL, bar_index + lineLen, sellSL, color = color.red, width = 1)
+    label.new(bar_index + lineLen + 1, sellSL, "SL", style = label.style_none, 
+             textcolor = color.red, size = size.tiny)
+    
+    line.new(bar_index, sellTP, bar_index + lineLen, sellTP, color = color.teal, width = 1)
+    label.new(bar_index + lineLen + 1, sellTP, "TP", style = label.style_none, 
+             textcolor = color.teal, size = size.tiny)
+    
+    waitingForSell := false
+
+// Cancel if trend changes
+if waitingForBuy and downtrend
+    waitingForBuy := false
+if waitingForSell and uptrend
+    waitingForSell := false
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+alertcondition(buyTriggered, "BUY Signal", "BUY Signal on {{ticker}}")
+alertcondition(sellTriggered, "SELL Signal", "SELL Signal on {{ticker}}")

@@ -1,0 +1,85 @@
+█ TREND IMPULSE ENTRY - Simple BUY/SELL
+
+A simple yet effective indicator that generates BUY/SELL signals with clear Entry, Stop Loss, and Take Profit levels.
+
+
+█ HOW IT WORKS
+
+This indicator combines 3 elements to generate high-quality signals:
+
+1. TREND DIRECTION
+   - Uses EMA(50) to confirm main trend
+   - Only BUY in uptrend, only SELL in downtrend
+
+2. IMPULSE DETECTION  
+   - Identifies strong momentum candles (> 1.5x ATR)
+   - These candles show where "big players" entered
+
+3. STRUCTURE CONFIRMATION
+   - BUY requires Higher High confirmation
+   - SELL requires Lower Low confirmation
+
+
+█ BUY SIGNAL CONDITIONS
+
+✓ Price is above EMA (uptrend)
+✓ A bullish impulse candle appeared (large green candle > 1.5x ATR)
+✓ Price makes a Higher High (confirms uptrend continuation)
+✓ Risk (Entry - SL) is >= 1 ATR (filters out weak setups)
+
+
+█ SELL SIGNAL CONDITIONS
+
+✓ Price is below EMA (downtrend)
+✓ A bearish impulse candle appeared (large red candle > 1.5x ATR)  
+✓ Price makes a Lower Low (confirms downtrend continuation)
+✓ Risk (SL - Entry) is >= 1 ATR (filters out weak setups)
+
+
+█ VISUAL DISPLAY
+
+When a signal triggers, you'll see 3 horizontal lines:
+• Blue line (thick) = Entry level
+• Red line = Stop Loss level
+• Teal line = Take Profit level
+
+Each line has a small text label at the end: "Entry", "SL", "TP"
+
+
+█ SETTINGS
+
+• Pivot Lookback (5) - Bars to look back for swing detection
+• Impulse Size ATR (1.5) - Candle must be >= this x ATR to be impulse
+• R:R Ratio (3.0) - Risk:Reward ratio (1:3 default)
+• Min Risk ATR (1.0) - Minimum risk size (filters weak signals)
+• EMA Period (50) - EMA period for trend detection
+
+
+█ TRADING TIPS
+
+1. Trade with the trend - This indicator only signals when aligned with main trend
+2. Wait for pullback - Signals trigger when price retraces to entry level
+3. Respect the SL - Stop Loss is based on impulse key level
+4. Adjust R:R - Increase R:R ratio in strong trends for bigger profits
+5. Higher timeframes - Works best on H1 and above for cleaner signals
+
+
+█ RECOMMENDED USAGE
+
+Timeframes: M15, H1, H4, D1
+Markets: Forex, Crypto, Stocks, Indices
+Style: Swing trading, Day trading
+
+
+█ ALERTS
+
+• BUY Signal - Triggers when BUY conditions are met
+• SELL Signal - Triggers when SELL conditions are met
+
+
+█ DISCLAIMER
+
+This indicator is for educational purposes only. Always use proper risk management and don't risk more than 1-2% per trade. Backtest thoroughly before live trading.
+
+
+Created with Pine Script v6 | Feedback welcome!

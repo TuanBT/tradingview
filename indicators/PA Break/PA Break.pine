@@ -1,0 +1,232 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+// Indicator : PA Break
+// ID        : pa_break
+// Version   : v0.2.0
+// Author    : MTS
+// Purpose   : Xác định điểm giá phá mạnh (breakout) khỏi đỉnh/đáy trước
+//             bằng cấu trúc Swing (Higher High / Lower Low).
+// Notes     : Áp dụng mọi khung thời gian. Không repaint (dùng pivot confirmed).
+//             "Phá mạnh" = khoảng phá (HH - SH cũ) >= swingRange * breakMult
+// ─────────────────────────────────────────────────────────────────────────────
+indicator(
+     title      = "PA Break [pa_break] v0.2.0",
+     shorttitle = "PA Break v0.2.0",
+     overlay    = true,
+     max_labels_count = 500,
+     max_lines_count  = 500,
+     max_boxes_count  = 500
+)
+
+// ============================================================================
+// A) INPUTS
+// ============================================================================
+string GRP_CORE  = "Core"
+string GRP_STYLE = "Style"
+
+pivotLen   = input.int(5,    "Pivot Lookback",     minval = 2, maxval = 50, group = GRP_CORE,
+             tooltip = "Số nến trái/phải để xác định Swing High/Low")
+breakMult  = input.float(1.0, "Break Strength (x Swing Range)", minval = 0.5, step = 0.25, group = GRP_CORE,
+             tooltip = "Khoảng phá phải >= breakMult × chiều cao swing trước đó.\n1.0 = phá bằng 1 swing, 2.0 = phá gấp đôi swing.")
+
+// Style
+showSwings     = input.bool(false, "Show Swing Points",     group = GRP_STYLE)
+showBreakLabel = input.bool(true,  "Show Break Labels",     group = GRP_STYLE)
+showBreakLine  = input.bool(true,  "Show Break Lines",      group = GRP_STYLE)
+
+colBreakUp   = input.color(color.new(color.green, 0),  "Break UP Label",     group = GRP_STYLE)
+colBreakDown = input.color(color.new(color.red, 0),    "Break DOWN Label",   group = GRP_STYLE)
+colEntryBuy  = input.color(color.new(color.blue, 0),   "Entry Buy Color",    group = GRP_STYLE)
+colEntrySell = input.color(color.new(#ff69b4, 0),      "Entry Sell Color",   group = GRP_STYLE)
+colSL        = input.color(color.new(color.yellow, 0), "SL Color",           group = GRP_STYLE)
+colSwingHigh = input.color(color.new(color.orange, 40), "Swing High Color",  group = GRP_STYLE)
+colSwingLow  = input.color(color.new(color.blue, 40),   "Swing Low Color",   group = GRP_STYLE)
+
+// ============================================================================
+// B) DATA — Không dùng MTF, chạy trên chart hiện tại
+// ============================================================================
+
+// ============================================================================
+// C) CORE LOGIC
+// ============================================================================
+
+// ── Swing Detection ──────────────────────────────────────────────────────────
+swingHigh = ta.pivothigh(high, pivotLen, pivotLen)
+swingLow  = ta.pivotlow(low,  pivotLen, pivotLen)
+
+// ── Track Swing History ──────────────────────────────────────────────────────
+// 2 swing highs gần nhất + 2 swing lows gần nhất
+var float sh1     = na      // Swing High mới nhất
+var float sh0     = na      // Swing High trước đó
+var int   sh1_idx = na
+var int   sh0_idx = na
+
+var float sl1     = na      // Swing Low mới nhất
+var float sl0     = na      // Swing Low trước đó
+var int   sl1_idx = na
+var int   sl0_idx = na
+
+// Lưu swing low gần nhất TRƯỚC swing high mới (dùng cho swing range calc)
+var float slBeforeSH = na
+var int   slBeforeSH_idx = na
+
+// Lưu swing high gần nhất TRƯỚC swing low mới (dùng cho swing range calc)
+var float shBeforeSL = na
+var int   shBeforeSL_idx = na
+
+if not na(swingLow)
+    sl0     := sl1
+    sl0_idx := sl1_idx
+    sl1     := swingLow
+    sl1_idx := bar_index - pivotLen
+
+if not na(swingHigh)
+    // Trước khi update swing high, ghi nhận swing low gần nhất
+    slBeforeSH     := sl1
+    slBeforeSH_idx := sl1_idx
+    sh0     := sh1
+    sh0_idx := sh1_idx
+    sh1     := swingHigh
+    sh1_idx := bar_index - pivotLen
+
+if not na(swingLow)
+    // Ghi nhận swing high gần nhất trước swing low này
+    shBeforeSL     := sh1
+    shBeforeSL_idx := sh1_idx
+
+// ── Higher High / Lower Low ─────────────────────────────────────────────────
+isNewHH = not na(swingHigh) and not na(sh0) and sh1 > sh0
+isNewLL = not na(swingLow)  and not na(sl0) and sl1 < sl0
+
+// ── Break Strength Filter ────────────────────────────────────────────────────
+// "Phá mạnh" = khoảng phá >= breakMult × swing range trước đó
+//
+// Bullish HH:
+//   swingRange = sh0 - slBeforeSH (chiều cao sóng trước)
+//   breakDist  = sh1 - sh0        (khoảng phá vượt đỉnh cũ)
+//   → breakDist >= swingRange * breakMult
+//
+// Bearish LL:
+//   swingRange = shBeforeSL - sl0 (chiều cao sóng trước)
+//   breakDist  = sl0 - sl1        (khoảng phá dưới đáy cũ)
+//   → breakDist >= swingRange * breakMult
+
+// Bullish break
+float swingRangeUp = na
+float breakDistUp  = na
+bool  breakUp      = false
+
+if isNewHH and not na(slBeforeSH)
+    swingRangeUp := sh0 - slBeforeSH
+    breakDistUp  := sh1 - sh0
+    if swingRangeUp > 0 and breakDistUp >= swingRangeUp * breakMult
+        breakUp := true
+
+// Bearish break
+float swingRangeDown = na
+float breakDistDown  = na
+bool  breakDown      = false
+
+if isNewLL and not na(shBeforeSL)
+    swingRangeDown := shBeforeSL - sl0
+    breakDistDown  := sl0 - sl1
+    if swingRangeDown > 0 and breakDistDown >= swingRangeDown * breakMult
+        breakDown := true
+
+// ============================================================================
+// D) PLOTTING / UI
+// ============================================================================
+
+// ── Swing Points (tắt mặc định để chart sạch) ───────────────────────────────
+plotshape(showSwings and not na(swingHigh), title = "Swing High",
+     style = shape.triangledown, location = location.abovebar,
+     color = colSwingHigh, offset = -pivotLen, size = size.tiny)
+
+plotshape(showSwings and not na(swingLow), title = "Swing Low",
+     style = shape.triangleup, location = location.belowbar,
+     color = colSwingLow, offset = -pivotLen, size = size.tiny)
+
+// ── Persistent Lines: kéo dài tới khi có breakout kế tiếp ───────────────────
+var line activeEntryLine = na
+var line activeSLLine    = na
+var label activeEntryLbl = na
+var label activeSLLbl    = na
+
+// Hàm kết thúc bộ đường cũ (cố định x2 tại bar hiện tại)
+f_terminateLines() =>
+    if not na(activeEntryLine)
+        line.set_x2(activeEntryLine, bar_index)
+    if not na(activeSLLine)
+        line.set_x2(activeSLLine, bar_index)
+    if not na(activeEntryLbl)
+        label.set_x(activeEntryLbl, bar_index)
+    if not na(activeSLLbl)
+        label.set_x(activeSLLbl, bar_index)
+
+// ── Breakout UP — HH Break ──────────────────────────────────────────────────
+if breakUp
+    if showBreakLine
+        // Kết thúc bộ đường cũ
+        f_terminateLines()
+        // Đường Entry Buy: đỉnh cũ bị phá (màu xanh dương)
+        activeEntryLine := line.new(sh0_idx, sh0, bar_index, sh0,
+             xloc = xloc.bar_index, color = colEntryBuy,
+             style = line.style_dashed, width = 1)
+        activeEntryLbl := label.new(bar_index, sh0, "Entry Buy",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_none, textcolor = colEntryBuy, size = size.tiny)
+        // Đường SL: đáy sóng trước (màu vàng)
+        activeSLLine := line.new(slBeforeSH_idx, slBeforeSH, bar_index, slBeforeSH,
+             xloc = xloc.bar_index, color = colSL,
+             style = line.style_dashed, width = 1)
+        activeSLLbl := label.new(bar_index, slBeforeSH, "SL",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_none, textcolor = colSL, size = size.tiny)
+
+    if showBreakLabel
+        label.new(sh1_idx, sh1, "▲ Break",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_down, color = colBreakUp,
+             textcolor = color.white, size = size.tiny)
+
+// ── Breakout DOWN — LL Break ────────────────────────────────────────────────
+if breakDown
+    if showBreakLine
+        // Kết thúc bộ đường cũ
+        f_terminateLines()
+        // Đường Entry Sell: đáy cũ bị phá (màu hồng)
+        activeEntryLine := line.new(sl0_idx, sl0, bar_index, sl0,
+             xloc = xloc.bar_index, color = colEntrySell,
+             style = line.style_dashed, width = 1)
+        activeEntryLbl := label.new(bar_index, sl0, "Entry Sell",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_none, textcolor = colEntrySell, size = size.tiny)
+        // Đường SL: đỉnh sóng trước (màu vàng)
+        activeSLLine := line.new(shBeforeSL_idx, shBeforeSL, bar_index, shBeforeSL,
+             xloc = xloc.bar_index, color = colSL,
+             style = line.style_dashed, width = 1)
+        activeSLLbl := label.new(bar_index, shBeforeSL, "SL",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_none, textcolor = colSL, size = size.tiny)
+
+    if showBreakLabel
+        label.new(sl1_idx, sl1, "▼ Break",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_up, color = colBreakDown,
+             textcolor = color.white, size = size.tiny)
+
+// ── Kéo dài đường active sang phải mỗi bar ──────────────────────────────────
+if not na(activeEntryLine)
+    line.set_x2(activeEntryLine, bar_index)
+if not na(activeSLLine)
+    line.set_x2(activeSLLine, bar_index)
+if not na(activeEntryLbl)
+    label.set_x(activeEntryLbl, bar_index)
+if not na(activeSLLbl)
+    label.set_x(activeSLLbl, bar_index)
+
+// ============================================================================
+// E) ALERTS
+// ============================================================================
+alertcondition(breakUp,   title = "HH Break (Bullish)", message = "PA Break: HH breakout on {{ticker}} @ {{close}}")
+alertcondition(breakDown, title = "LL Break (Bearish)",  message = "PA Break: LL breakout on {{ticker}} @ {{close}}")
