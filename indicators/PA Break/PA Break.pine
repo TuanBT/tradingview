@@ -186,6 +186,8 @@ var bool  inDownWave     = false
 var float curWavePeak    = na
 var float curWaveTrough  = na
 var int   waveConfBar    = na   // bar_index when wave confirmed
+var float waveConfHigh   = na   // high of wave confirm bar
+var float waveConfLow    = na   // low of wave confirm bar
 
 // Candle direction
 bool isBullish = close >= open
@@ -201,6 +203,8 @@ int   confSL_idx     = na
 int   confBreak_idx  = na
 float confBreakPt    = na
 int   confWaveBar    = na  // bar where wave was confirmed
+float confWaveHigh   = na  // high of wave confirm bar
+float confWaveLow    = na  // low of wave confirm bar
 
 // -- Phase 2: Retest at break point → entry confirmed --
 if pendingState == 2 and not na(pendBreakPoint)
@@ -215,6 +219,8 @@ if pendingState == 2 and not na(pendBreakPoint)
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
         confWaveBar   := waveConfBar
+        confWaveHigh  := waveConfHigh
+        confWaveLow   := waveConfLow
         pendingState  := 0
 
 if pendingState == -2 and not na(pendBreakPoint)
@@ -229,6 +235,8 @@ if pendingState == -2 and not na(pendBreakPoint)
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
         confWaveBar   := waveConfBar
+        confWaveHigh  := waveConfHigh
+        confWaveLow   := waveConfLow
         pendingState  := 0
 
 // -- Phase 1: Wave tracking after break --
@@ -255,12 +263,17 @@ if pendingState == 1
                 waveCount += 1
                 if waveCount == 1
                     wave1Peak := curWavePeak
-                else if waveCount >= 2
+                else if waveCount == 2
                     wave2Peak := curWavePeak
                     if wave2Peak > wave1Peak and wave2Peak > pendBreakPoint
                         // Wave confirmed! → move to retest phase
                         pendingState := 2
                         waveConfBar  := bar_index
+                        waveConfHigh := high
+                        waveConfLow  := low
+                    else
+                        // Wave 2 failed to exceed wave 1 → cancel
+                        pendingState := 0
                 inUpWave    := false
                 inDownWave  := true
                 curWavePeak := na
@@ -270,6 +283,9 @@ if pendingState == 1
 if pendingState == -1
     // SELL: tracking mini down-waves
     if not na(pendSL) and high >= pendSL
+        pendingState := 0
+    else if not na(pendBreakPoint) and high >= pendBreakPoint
+        // Pre-confirm retest invalidation
         pendingState := 0
     else
         if not isBullish
@@ -290,12 +306,17 @@ if pendingState == -1
                 waveCount += 1
                 if waveCount == 1
                     wave1Peak := curWaveTrough   // "peak" = trough for SELL
-                else if waveCount >= 2
+                else if waveCount == 2
                     wave2Peak := curWaveTrough
                     if wave2Peak < wave1Peak and wave2Peak < pendBreakPoint
                         // Wave confirmed! → move to retest phase
                         pendingState := -2
                         waveConfBar  := bar_index
+                        waveConfHigh := high
+                        waveConfLow  := low
+                    else
+                        // Wave 2 failed to exceed wave 1 → cancel
+                        pendingState := 0
                 inDownWave  := false
                 inUpWave    := true
                 curWaveTrough := na
@@ -321,6 +342,49 @@ if rawBreakUp and pendingState != 2
     inDownWave    := false
     curWavePeak   := na
     curWaveTrough := na
+    // Retroactively scan bars from SH candle to current bar
+    // SH candle is at offset pivotLen, scan from pivotLen-1 down to 0
+    for i = pivotLen - 1 to 0
+        if pendingState != 1
+            break
+        float rHigh  = high[i]
+        float rLow   = low[i]
+        bool  rBull  = close[i] >= open[i]
+        // SL check
+        if not na(pendSL) and rLow <= pendSL
+            pendingState := 0
+            break
+        // Wave tracking (same as Phase 1 BUY)
+        if rBull
+            if not inUpWave
+                inUpWave    := true
+                inDownWave  := false
+                curWavePeak := rHigh
+            else
+                if rHigh > curWavePeak
+                    curWavePeak := rHigh
+        else
+            if inUpWave
+                if rHigh > curWavePeak
+                    curWavePeak := rHigh
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWavePeak
+                else if waveCount == 2
+                    wave2Peak := curWavePeak
+                    if wave2Peak > wave1Peak and wave2Peak > pendBreakPoint
+                        pendingState := 2
+                        waveConfBar  := bar_index - i
+                        waveConfHigh := rHigh
+                        waveConfLow  := rLow
+                    else
+                        pendingState := 0
+                    break
+                inUpWave    := false
+                inDownWave  := true
+                curWavePeak := na
+            else
+                inDownWave := true
 
 if rawBreakDown and pendingState != -2
     pendingState   := -1
@@ -339,6 +403,52 @@ if rawBreakDown and pendingState != -2
     inDownWave    := false
     curWavePeak   := na
     curWaveTrough := na
+    // Retroactively scan bars from SL candle to current bar
+    for i = pivotLen - 1 to 0
+        if pendingState != -1
+            break
+        float rHigh  = high[i]
+        float rLow   = low[i]
+        bool  rBull  = close[i] >= open[i]
+        // SL check
+        if not na(pendSL) and rHigh >= pendSL
+            pendingState := 0
+            break
+        // Pre-confirm retest invalidation (SELL)
+        if not na(pendBreakPoint) and rHigh >= pendBreakPoint
+            pendingState := 0
+            break
+        // Wave tracking (same as Phase 1 SELL)
+        if not rBull
+            if not inDownWave
+                inDownWave    := true
+                inUpWave      := false
+                curWaveTrough := rLow
+            else
+                if rLow < curWaveTrough
+                    curWaveTrough := rLow
+        else
+            if inDownWave
+                if rLow < curWaveTrough
+                    curWaveTrough := rLow
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWaveTrough
+                else if waveCount == 2
+                    wave2Peak := curWaveTrough
+                    if wave2Peak < wave1Peak and wave2Peak < pendBreakPoint
+                        pendingState := -2
+                        waveConfBar  := bar_index - i
+                        waveConfHigh := rHigh
+                        waveConfLow  := rLow
+                    else
+                        pendingState := 0
+                    break
+                inDownWave  := false
+                inUpWave    := true
+                curWaveTrough := na
+            else
+                inUpWave := true
 
 // ============================================================================
 // D) PLOTTING / UI
@@ -375,9 +485,9 @@ if confirmedBuy
              style = line.style_dashed, width = 1)
 
     if showBreakLabel
-        label.new(confWaveBar, confBreakPt, "▲ BUY",
+        label.new(confWaveBar, confWaveHigh, "Confirm Break",
              xloc = xloc.bar_index, yloc = yloc.price,
-             style = label.style_label_up, color = colBreakUp,
+             style = label.style_label_down, color = colBreakUp,
              textcolor = color.white, size = size.tiny)
 
 // -- Confirmed SELL Retest --
@@ -392,9 +502,9 @@ if confirmedSell
              style = line.style_dashed, width = 1)
 
     if showBreakLabel
-        label.new(confWaveBar, confBreakPt, "▼ SELL",
+        label.new(confWaveBar, confWaveLow, "Confirm Break",
              xloc = xloc.bar_index, yloc = yloc.price,
-             style = label.style_label_down, color = colBreakDown,
+             style = label.style_label_up, color = colBreakDown,
              textcolor = color.white, size = size.tiny)
 
 // -- Extend active lines to the right every bar --

@@ -97,6 +97,7 @@ def run_pa_break(
     sl_buffer_pct: float = 0.002,   # 0.2% SL buffer (thay ATR cho đơn giản)
     break_mult: float = 0.0,        # Break strength filter (0=OFF)
     impulse_mult: float = 1.5,      # Impulse body filter (0=OFF)
+    debug_range: tuple = None,       # (start_ts, end_ts) for debug output
 ) -> tuple[List[Signal], List[SwingPoint]]:
     """
     Chạy PA Break strategy trên historical data.
@@ -115,6 +116,7 @@ def run_pa_break(
         sl_buffer_pct: SL buffer percentage (thay cho ATR buffer)
         break_mult:    Break strength filter (0=OFF)
         impulse_mult:  Nến break phải có body >= impulse_mult × avg body (0=OFF)
+        debug_range:   Optional (start, end) pd.Timestamp tuple for debug output
 
     Returns:
         (signals, swings)
@@ -183,6 +185,8 @@ def run_pa_break(
         bar_close = closes[bar_i]
         bar_open = opens[bar_i]
         is_bullish = bar_close >= bar_open
+        _dbg = debug_range and debug_range[0] <= bar_time <= debug_range[1]
+        _ts = bar_time.strftime('%H:%M') if _dbg else ''
 
         # Check if any swing is confirmed at this bar
         confirmed_bar = bar_i - pivot_len
@@ -242,6 +246,8 @@ def run_pa_break(
         # ── HH / LL Detection (true HH: must exceed ALL recent SH) ──
         is_new_hh = is_sw_h and sh0 is not None and sh1 > sh0 and (sh_recent_max is None or sh1 >= sh_recent_max)
         is_new_ll = is_sw_l and sl0 is not None and sl1 < sl0 and (sl_recent_min is None or sl1 <= sl_recent_min)
+        if _dbg and is_sw_h: print(f"[{_ts}] SH={sh1:.2f}@{times[confirmed_bar].strftime('%H:%M')}, sh0={'%.2f'%sh0 if sh0 else '-'}, HH={is_new_hh}")
+        if _dbg and is_sw_l: print(f"[{_ts}] SL={sl1:.2f}@{times[confirmed_bar].strftime('%H:%M')}, LL={is_new_ll}")
 
         # ── Impulse Body Filter ──
         if impulse_mult > 0:
@@ -282,6 +288,7 @@ def run_pa_break(
                 break_dist = sh1 - sh0
                 if swing_range > 0 and break_dist >= swing_range * break_mult:
                     raw_break_up = True
+        if _dbg and raw_break_up: print(f"[{_ts}] ★ BREAK UP! sh1={sh1:.2f}")
 
         if is_new_ll and sh_before_sl is not None:
             if break_mult <= 0:
@@ -304,6 +311,7 @@ def run_pa_break(
             elif bar_low <= pend_break_point:
                 confirmed_buy = True
                 pending_dir = 0
+                if _dbg: print(f"[{_ts}] ★★★ ENTRY BUY at {pend_break_point:.2f}")
 
         if pending_dir == -2 and pend_break_point is not None:
             # SL invalidation
@@ -341,13 +349,19 @@ def run_pa_break(
                         wave_count += 1
                         if wave_count == 1:
                             wave1_peak = current_wave_peak
-                        elif wave_count >= 2:
+                            if _dbg: print(f"[{_ts}] W1 end, pk={wave1_peak:.2f}")
+                        elif wave_count == 2:
                             wave2_peak = current_wave_peak
                             # Check confirm: wave2 > wave1 AND wave2 > break point
                             if wave2_peak > wave1_peak and wave2_peak > pend_break_point:
                                 # Wave confirmed! → Move to retest phase
                                 pending_dir = 2
                                 wave_conf_time = bar_time
+                                if _dbg: print(f"[{_ts}] ✓ CONFIRM w2={wave2_peak:.2f}>w1={wave1_peak:.2f}")
+                            else:
+                                # Wave 2 failed to exceed wave 1 → cancel
+                                pending_dir = 0
+                                if _dbg: print(f"[{_ts}] ✗ FAIL w2={wave2_peak:.2f} w1={wave1_peak:.2f} bp={pend_break_point:.2f}")
                         in_up_wave = False
                         in_down_wave = True
                         current_wave_peak = None
@@ -358,6 +372,9 @@ def run_pa_break(
             # ── SELL: tracking mini-waves after LL break ──
             # SL invalidation
             if pend_sl is not None and bar_high >= pend_sl:
+                pending_dir = 0
+            # Pre-confirm retest invalidation: price must not touch entry before confirm
+            elif pend_break_point is not None and bar_high >= pend_break_point:
                 pending_dir = 0
             else:
                 # Track down-waves: consecutive bearish candles
@@ -379,13 +396,16 @@ def run_pa_break(
                         wave_count += 1
                         if wave_count == 1:
                             wave1_peak = current_wave_trough  # "peak" = trough for SELL
-                        elif wave_count >= 2:
+                        elif wave_count == 2:
                             wave2_peak = current_wave_trough
                             # Check confirm: wave2 < wave1 AND wave2 < break point
                             if wave2_peak < wave1_peak and wave2_peak < pend_break_point:
                                 # Wave confirmed! → Move to retest phase
                                 pending_dir = -2
                                 wave_conf_time = bar_time
+                            else:
+                                # Wave 2 failed to exceed wave 1 → cancel
+                                pending_dir = 0
                         in_down_wave = False
                         in_up_wave = True
                         current_wave_trough = None
@@ -395,6 +415,7 @@ def run_pa_break(
         # ── New raw break → start wave tracking (overrides old wave tracking) ──
         # BUT: don't override if in retest phase (already confirmed)
         if raw_break_up and pending_dir != 2:
+            if _dbg: print(f"[{_ts}] → SET pending=1, bp={sh1:.2f}, sl={sl_before_sh}")
             pending_dir = 1
             pend_break_point = sh1
             pend_sl = sl_before_sh
@@ -412,13 +433,47 @@ def run_pa_break(
             current_wave_peak = None
             current_wave_trough = None
 
-            # The break candle itself starts wave 1
-            # Find the impulse candle (first close > sh0)
-            # Waves start from the bar after sh1 is confirmed (= current bar)
-            # Actually, the impulse candle already happened. We start tracking
-            # waves from current bar onwards.
+            # Retroactively scan bars from SH candle to current bar
+            # to initialize wave state (waves start from actual SH, not confirmation bar)
+            for retro_j in range(confirmed_bar + 1, bar_i + 1):
+                rj_bull = closes[retro_j] >= opens[retro_j]
+                rj_high = highs[retro_j]
+                rj_low = lows[retro_j]
+                # SL check
+                if pend_sl is not None and rj_low <= pend_sl:
+                    pending_dir = 0
+                    if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] SL hit → cancel")
+                    break
+                # Wave tracking (same logic as Phase 1 BUY)
+                if rj_bull:
+                    if not in_up_wave:
+                        in_up_wave = True; in_down_wave = False
+                        current_wave_peak = rj_high
+                    else:
+                        current_wave_peak = max(current_wave_peak or 0, rj_high)
+                else:
+                    if in_up_wave:
+                        current_wave_peak = max(current_wave_peak or 0, rj_high)
+                        wave_count += 1
+                        if wave_count == 1:
+                            wave1_peak = current_wave_peak
+                            if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] W1 end pk={wave1_peak:.2f}")
+                        elif wave_count == 2:
+                            wave2_peak = current_wave_peak
+                            if wave2_peak > wave1_peak and wave2_peak > pend_break_point:
+                                pending_dir = 2
+                                wave_conf_time = times[retro_j]
+                                if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] ✓ CONFIRM w2={wave2_peak:.2f}>w1={wave1_peak:.2f}")
+                            else:
+                                pending_dir = 0
+                                if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] ✗ FAIL w2={wave2_peak:.2f}")
+                            break
+                        in_up_wave = False; in_down_wave = True; current_wave_peak = None
+                    else:
+                        in_down_wave = True
 
         if raw_break_down and pending_dir != -2:
+            if _dbg: print(f"[{_ts}] → SET pending=-1, bp={sl1:.2f}, sl={sh_before_sl}")
             pending_dir = -1
             pend_break_point = sl1
             pend_sl = sh_before_sl
@@ -434,6 +489,49 @@ def run_pa_break(
             in_down_wave = False
             current_wave_peak = None
             current_wave_trough = None
+
+            # Retroactively scan bars from SL candle to current bar
+            for retro_j in range(confirmed_bar + 1, bar_i + 1):
+                rj_bull = closes[retro_j] >= opens[retro_j]
+                rj_high = highs[retro_j]
+                rj_low = lows[retro_j]
+                # SL check
+                if pend_sl is not None and rj_high >= pend_sl:
+                    pending_dir = 0
+                    if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] SL hit → cancel")
+                    break
+                # Pre-confirm retest invalidation (SELL only)
+                if pend_break_point is not None and rj_high >= pend_break_point:
+                    pending_dir = 0
+                    if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] Pre-confirm retest → cancel")
+                    break
+                # Wave tracking (same logic as Phase 1 SELL)
+                if not rj_bull:
+                    if not in_down_wave:
+                        in_down_wave = True; in_up_wave = False
+                        current_wave_trough = rj_low
+                    else:
+                        current_wave_trough = min(current_wave_trough or float('inf'), rj_low)
+                else:
+                    if in_down_wave:
+                        current_wave_trough = min(current_wave_trough or float('inf'), rj_low)
+                        wave_count += 1
+                        if wave_count == 1:
+                            wave1_peak = current_wave_trough
+                            if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] W1 end pk={wave1_peak:.2f}")
+                        elif wave_count == 2:
+                            wave2_peak = current_wave_trough
+                            if wave2_peak < wave1_peak and wave2_peak < pend_break_point:
+                                pending_dir = -2
+                                wave_conf_time = times[retro_j]
+                                if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] ✓ CONFIRM w2={wave2_peak:.2f}<w1={wave1_peak:.2f}")
+                            else:
+                                pending_dir = 0
+                                if _dbg: print(f"  retro[{times[retro_j].strftime('%H:%M')}] ✗ FAIL w2={wave2_peak:.2f}")
+                            break
+                        in_down_wave = False; in_up_wave = True; current_wave_trough = None
+                    else:
+                        in_up_wave = True
 
         # ── Process confirmed signals ──
         if confirmed_buy and pend_break_point is not None and pend_sl is not None:
@@ -531,17 +629,19 @@ def signals_to_dataframe(signals: List[Signal]) -> pd.DataFrame:
     records = []
     for s in signals:
         risk = abs(s.entry - s.sl)
+        # Format times as YYYY-MM-DD HH:MI (preserve original timezone)
+        fmt = "%Y-%m-%d %H:%M"
         records.append({
-            "Time": s.time,
+            "Time": s.time.strftime(fmt) if s.time else None,
             "Direction": s.direction,
-            "Entry": round(s.entry, 5),
-            "SL": round(s.sl, 5),
-            "TP": round(s.tp, 5) if s.tp > 0 else None,
-            "Risk": round(risk, 5),
-            "Break Point": round(s.break_point, 5),
-            "Break Time": s.break_time,
-            "Wave Confirm": s.wave_confirm_time,
-            "Confirm Time": s.confirm_time,
+            "Entry": round(s.entry, 2),
+            "SL": round(s.sl, 2),
+            "TP": round(s.tp, 2) if s.tp > 0 else None,
+            "Risk": round(risk, 2),
+            "Break Point": round(s.break_point, 2),
+            "Break Time": s.break_time.strftime(fmt) if s.break_time else None,
+            "Wave Confirm": s.wave_confirm_time.strftime(fmt) if s.wave_confirm_time else None,
+            "Confirm Time": s.confirm_time.strftime(fmt) if s.confirm_time else None,
             "Result": s.result,
             "PnL (R)": round(s.pnl_r, 2),
         })

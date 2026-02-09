@@ -7,6 +7,14 @@
     - Wave peak bao gồm cả HIGH của nến đầu tiên đổi chiều (râu có thể cao hơn).
     - Xác nhận: Wave 2 peak > Wave 1 peak (BUY) hoặc Wave 2 trough < Wave 1 trough (SELL).
   - Phase 2 (Retest): Sau wave confirm, chờ giá quay về break point (limit order).
+- **Retroactive Wave Scanning**: Khi break xác nhận tại nến hiện tại, quét ngược các nến từ đỉnh/đáy SH/SL thực tế đến nến hiện tại để đếm sóng.
+  - Sóng bắt đầu từ nến SH/SL thực tế (offset `pivotLen`), KHÔNG phải từ nến xác nhận.
+  - Nếu sóng đã hoàn thành trong quá khứ → xác nhận/hủy ngay tại nến break.
+  - Nếu chưa đủ sóng → tiếp tục track live ở các nến tiếp theo (Phase 1).
+  - VD: SH tại 01:15, xác nhận tại 01:40 → quét nến 01:20→01:40 để đếm sóng.
+- **Pre-confirm Retest Invalidation (SELL only)**: Trước wave confirm, nếu có nến HIGH chạm break point → hủy pending.
+  - Áp dụng cho SELL vì giá thường nằm trên break point sau LL break → dễ retest sớm.
+  - BUY không áp dụng vì giá tự nhiên dưới HH break point.
 - **Entry = Break Point**: Entry = sh1 (cho BUY) hoặc sl1 (cho SELL), thay vì đỉnh/đáy cũ (sh0/shGroupMax).
 - **Bỏ Group Tracking**: Không cần shGroupMax/slGroupMin vì entry = break point.
 - **Override Protection**: Break mới không override state 2/-2 (đã wave confirm, đang chờ retest).
@@ -16,8 +24,7 @@
   - Reset trackers sau mỗi break hợp lệ (bắt đầu chu kỳ mới).
   - Lọc false HH/LL: VD. SH 08:35=4904 bị loại vì SH 06:00=4921 cao hơn.
 - **States**: 0=idle, 1=pendingBuyWave, 2=pendingBuyRetest, -1=pendingSellWave, -2=pendingSellRetest.
-- **Label Position**: Wave ✓ label hiện ở nến xác nhận (confirm candle), không phải tại break point.
-- Labels: "▲ Wave ✓" / "▼ Wave ✓".
+- **Label Position**: "Confirm Break" label hiện ở nến xác nhận wave, không phải tại break point.
 - Python `strategy_pa_break.py` sync v0.7.0.
 
 ## v0.6.0

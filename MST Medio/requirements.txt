@@ -1,5 +1,3 @@
-yfinance>=0.2.31
+tvdatafeed @ git+https://github.com/rongardF/tvdatafeed.git
 pandas>=2.0.0
-plotly>=5.18.0
-mplfinance>=0.12.10b0
 numpy>=1.24.0

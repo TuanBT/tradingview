@@ -1,0 +1,521 @@
+//@version=6
+// ─────────────────────────────────────────────────────────────────────────────
+// Indicator : MST Medio
+// Version   : v0.1
+// Author    : MTS
+// Based on  : PA Break v0.7.0
+// Purpose   : Detect HH/LL breakouts → wave confirmation (mini-wave HH/LL)
+//             → then wait for RETEST at the break point to enter.
+//             Entry = break point (sh1/sl1), SL = swing trước đó.
+// Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
+//             Break = HH/LL → wave confirm → retest → entry signal.
+// ─────────────────────────────────────────────────────────────────────────────
+indicator(
+     title      = "MST Medio v0.1",
+     shorttitle = "MST Medio",
+     overlay    = true,
+     max_labels_count = 500,
+     max_lines_count  = 500,
+     max_boxes_count  = 500
+)
+
+// ============================================================================
+// A) INPUTS
+// ============================================================================
+string GRP_CORE  = "Core"
+string GRP_STYLE = "Style"
+
+pivotLen   = input.int(5,   "Pivot Lookback", minval = 2, maxval = 50, group = GRP_CORE,
+             tooltip = "Number of bars left/right to confirm a Swing High/Low.")
+breakMult  = input.float(0.25, "Break Strength (x Swing Range)", minval = 0, step = 0.25, group = GRP_CORE,
+             tooltip = "Break distance must be >= breakMult x previous swing range. 0 = filter OFF.")
+impulseMult = input.float(1.5, "Impulse Body (x Avg Body)", minval = 0, step = 0.25, group = GRP_CORE,
+             tooltip = "Nến break phải có thân >= impulseMult x body trung bình. 0 = OFF.")
+
+// Style
+showSwings     = input.bool(false, "Show Swing Points",     group = GRP_STYLE)
+showBreakLabel = input.bool(true,  "Show Break Labels",     group = GRP_STYLE)
+showBreakLine  = input.bool(true,  "Show Break Lines",      group = GRP_STYLE)
+
+colBreakUp   = input.color(color.new(color.green, 0),  "Break UP Label",     group = GRP_STYLE)
+colBreakDown = input.color(color.new(color.red, 0),    "Break DOWN Label",   group = GRP_STYLE)
+colEntryBuy  = input.color(color.new(color.blue, 0),   "Entry Buy Color",    group = GRP_STYLE)
+colEntrySell = input.color(color.new(#ff69b4, 0),      "Entry Sell Color",   group = GRP_STYLE)
+colSL        = input.color(color.new(color.yellow, 0), "SL Color",           group = GRP_STYLE)
+colSwingHigh = input.color(color.new(color.orange, 40), "Swing High Color",  group = GRP_STYLE)
+colSwingLow  = input.color(color.new(color.blue, 40),   "Swing Low Color",   group = GRP_STYLE)
+
+// ============================================================================
+// B) CORE LOGIC
+// ============================================================================
+
+// -- Swing Detection --
+swingHigh = ta.pivothigh(high, pivotLen, pivotLen)
+swingLow  = ta.pivotlow(low,  pivotLen, pivotLen)
+
+// -- Track Swing History --
+var float sh1     = na      // Most recent Swing High
+var float sh0     = na      // Previous Swing High
+var int   sh1_idx = na
+var int   sh0_idx = na
+
+var float sl1     = na      // Most recent Swing Low
+var float sl0     = na      // Previous Swing Low
+var int   sl1_idx = na
+var int   sl0_idx = na
+
+var float slBeforeSH     = na   // Last SL before the most recent SH
+var int   slBeforeSH_idx = na
+var float shBeforeSL     = na   // Last SH before the most recent SL
+var int   shBeforeSL_idx = na
+
+// Track highest SH / lowest SL since last break (for true HH/LL detection)
+var float shRecentMax     = na   // Highest SH since last valid LL break
+var float slRecentMin     = na   // Lowest SL since last valid HH break
+
+if not na(swingLow)
+    sl0     := sl1
+    sl0_idx := sl1_idx
+    sl1     := swingLow
+    sl1_idx := bar_index - pivotLen
+    // Track lowest SL
+    if na(slRecentMin) or swingLow < slRecentMin
+        slRecentMin := swingLow
+
+if not na(swingHigh)
+    slBeforeSH     := sl1
+    slBeforeSH_idx := sl1_idx
+    sh0     := sh1
+    sh0_idx := sh1_idx
+    sh1     := swingHigh
+    sh1_idx := bar_index - pivotLen
+    // Track highest SH
+    if na(shRecentMax) or swingHigh > shRecentMax
+        shRecentMax := swingHigh
+
+if not na(swingLow)
+    shBeforeSL     := sh1
+    shBeforeSL_idx := sh1_idx
+
+// -- HH / LL Detection (true HH: must exceed ALL recent SH, not just sh0) --
+bool isNewHH = not na(swingHigh) and not na(sh0) and sh1 > sh0 and sh1 >= shRecentMax
+bool isNewLL = not na(swingLow)  and not na(sl0) and sl1 < sl0 and sl1 <= slRecentMin
+
+// -- Impulse Body Filter (nến break phải có thân dài) --
+// Tìm nến đầu tiên CLOSE vượt đỉnh/đáy cũ, check body >= impulseMult × avg
+float _avgBody = ta.sma(math.abs(close - open), 20)
+
+if isNewHH and impulseMult > 0
+    int _fromBar = bar_index - sh0_idx   // sh0 position (lookback)
+    int _toBar   = pivotLen               // sh1 position (lookback)
+    bool _found  = false
+    for i = _fromBar to _toBar
+        if close[i] > sh0
+            // This is the FIRST candle closing above → must be impulse
+            _found := math.abs(close[i] - open[i]) >= impulseMult * _avgBody
+            break  // Only check the FIRST one
+    if not _found
+        isNewHH := false
+
+if isNewLL and impulseMult > 0
+    int _fromBar = bar_index - sl0_idx
+    int _toBar   = pivotLen
+    bool _found  = false
+    for i = _fromBar to _toBar
+        if close[i] < sl0
+            _found := math.abs(close[i] - open[i]) >= impulseMult * _avgBody
+            break  // Only check the FIRST one
+    if not _found
+        isNewLL := false
+
+// -- Break Strength Filter (optional, default OFF) --
+bool rawBreakUp  = false
+bool rawBreakDown = false
+
+if isNewHH and not na(slBeforeSH)
+    if breakMult <= 0
+        rawBreakUp := true
+    else
+        float swR = sh0 - slBeforeSH
+        float brD = sh1 - sh0
+        if swR > 0 and brD >= swR * breakMult
+            rawBreakUp := true
+
+if isNewLL and not na(shBeforeSL)
+    if breakMult <= 0
+        rawBreakDown := true
+    else
+        float swR = shBeforeSL - sl0
+        float brD = sl0 - sl1
+        if swR > 0 and brD >= swR * breakMult
+            rawBreakDown := true
+
+// ============================================================================
+// C) 3-PHASE CONFIRMATION: BREAK → WAVE CONFIRM → RETEST ENTRY
+// ============================================================================
+// Phase 1 (pendingWave): HH/LL break detected + impulse body
+//   → Track mini-waves by candle color changes.
+//   → Up-wave = consecutive bullish candles (BUY), Down-wave = consecutive bearish (SELL)
+//   → Wave confirmed when Wave 2 peak > Wave 1 peak AND > break point (BUY)
+//     or Wave 2 trough < Wave 1 trough AND < break point (SELL)
+//   → Cancel nếu giá chạm SL.
+//
+// Phase 2 (pendingRetest): Wave confirmed
+//   → chờ giá retest (quay về) break point (sh1 cho BUY, sl1 cho SELL)
+//   → Cancel nếu giá chạm SL.
+//
+// States:
+//   0 = idle
+//   1 = phase 1: chờ wave confirm BUY
+//   2 = phase 2: chờ retest BUY
+//  -1 = phase 1: chờ wave confirm SELL
+//  -2 = phase 2: chờ retest SELL
+
+var int   pendingState   = 0
+var float pendBreakPoint = na   // HH or LL level (= entry level for retest)
+var float pendSL         = na   // Stop Loss level
+var int   pendSL_idx     = na
+var int   pendBreak_idx  = na
+
+// Wave tracking variables
+var int   waveCount      = 0
+var float wave1Peak      = na
+var float wave2Peak      = na
+var bool  inUpWave       = false
+var bool  inDownWave     = false
+var float curWavePeak    = na
+var float curWaveTrough  = na
+var int   waveConfBar    = na   // bar_index when wave confirmed
+var float waveConfHigh   = na   // high of wave confirm bar
+var float waveConfLow    = na   // low of wave confirm bar
+
+// Candle direction
+bool isBullish = close >= open
+
+// Confirmed signals (for plotting and alerts)
+bool confirmedBuy  = false
+bool confirmedSell = false
+
+// Save confirmed values for drawing
+float confEntry      = na
+float confSL         = na
+int   confSL_idx     = na
+int   confBreak_idx  = na
+float confBreakPt    = na
+int   confWaveBar    = na  // bar where wave was confirmed
+float confWaveHigh   = na  // high of wave confirm bar
+float confWaveLow    = na  // low of wave confirm bar
+
+// -- Phase 2: Retest at break point → entry confirmed --
+if pendingState == 2 and not na(pendBreakPoint)
+    // SL invalidation
+    if not na(pendSL) and low <= pendSL
+        pendingState := 0
+    else if low <= pendBreakPoint
+        confirmedBuy  := true
+        confEntry     := pendBreakPoint
+        confSL        := pendSL
+        confSL_idx    := pendSL_idx
+        confBreak_idx := pendBreak_idx
+        confBreakPt   := pendBreakPoint
+        confWaveBar   := waveConfBar
+        confWaveHigh  := waveConfHigh
+        confWaveLow   := waveConfLow
+        pendingState  := 0
+
+if pendingState == -2 and not na(pendBreakPoint)
+    // SL invalidation
+    if not na(pendSL) and high >= pendSL
+        pendingState := 0
+    else if high >= pendBreakPoint
+        confirmedSell := true
+        confEntry     := pendBreakPoint
+        confSL        := pendSL
+        confSL_idx    := pendSL_idx
+        confBreak_idx := pendBreak_idx
+        confBreakPt   := pendBreakPoint
+        confWaveBar   := waveConfBar
+        confWaveHigh  := waveConfHigh
+        confWaveLow   := waveConfLow
+        pendingState  := 0
+
+// -- Phase 1: Wave tracking after break --
+if pendingState == 1
+    // BUY: tracking mini up-waves
+    if not na(pendSL) and low <= pendSL
+        pendingState := 0
+    else
+        if isBullish
+            if not inUpWave
+                inUpWave    := true
+                inDownWave  := false
+                curWavePeak := high
+            else
+                if high > curWavePeak
+                    curWavePeak := high
+        else
+            // Bearish candle
+            if inUpWave
+                // Include this bar's HIGH in wave peak (wick can be higher)
+                if high > curWavePeak
+                    curWavePeak := high
+                // Up-wave ended → count it
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWavePeak
+                else if waveCount == 2
+                    wave2Peak := curWavePeak
+                    if wave2Peak > wave1Peak and wave2Peak > pendBreakPoint
+                        // Wave confirmed! → move to retest phase
+                        pendingState := 2
+                        waveConfBar  := bar_index
+                        waveConfHigh := high
+                        waveConfLow  := low
+                    else
+                        // Wave 2 failed to exceed wave 1 → cancel
+                        pendingState := 0
+                inUpWave    := false
+                inDownWave  := true
+                curWavePeak := na
+            else
+                inDownWave := true
+
+if pendingState == -1
+    // SELL: tracking mini down-waves
+    if not na(pendSL) and high >= pendSL
+        pendingState := 0
+    else if not na(pendBreakPoint) and high >= pendBreakPoint
+        // Pre-confirm retest invalidation
+        pendingState := 0
+    else
+        if not isBullish
+            if not inDownWave
+                inDownWave    := true
+                inUpWave      := false
+                curWaveTrough := low
+            else
+                if low < curWaveTrough
+                    curWaveTrough := low
+        else
+            // Bullish candle
+            if inDownWave
+                // Include this bar's LOW in wave trough
+                if low < curWaveTrough
+                    curWaveTrough := low
+                // Down-wave ended → count it
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWaveTrough   // "peak" = trough for SELL
+                else if waveCount == 2
+                    wave2Peak := curWaveTrough
+                    if wave2Peak < wave1Peak and wave2Peak < pendBreakPoint
+                        // Wave confirmed! → move to retest phase
+                        pendingState := -2
+                        waveConfBar  := bar_index
+                        waveConfHigh := high
+                        waveConfLow  := low
+                    else
+                        // Wave 2 failed to exceed wave 1 → cancel
+                        pendingState := 0
+                inDownWave  := false
+                inUpWave    := true
+                curWaveTrough := na
+            else
+                inUpWave := true
+
+// -- New raw break → start wave tracking (overrides old wave tracking) --
+// BUT: don't override if in retest phase (already confirmed)
+if rawBreakUp and pendingState != 2
+    pendingState   := 1
+    pendBreakPoint := sh1
+    pendSL         := slBeforeSH
+    pendSL_idx     := slBeforeSH_idx
+    pendBreak_idx  := sh1_idx
+    // Reset recent tracking (new cycle starts after break)
+    shRecentMax   := sh1
+    slRecentMin   := na
+    // Reset wave state
+    waveCount     := 0
+    wave1Peak     := na
+    wave2Peak     := na
+    inUpWave      := false
+    inDownWave    := false
+    curWavePeak   := na
+    curWaveTrough := na
+    // Retroactively scan bars from SH candle to current bar
+    // SH candle is at offset pivotLen, scan from pivotLen-1 down to 0
+    for i = pivotLen - 1 to 0
+        if pendingState != 1
+            break
+        float rHigh  = high[i]
+        float rLow   = low[i]
+        bool  rBull  = close[i] >= open[i]
+        // SL check
+        if not na(pendSL) and rLow <= pendSL
+            pendingState := 0
+            break
+        // Wave tracking (same as Phase 1 BUY)
+        if rBull
+            if not inUpWave
+                inUpWave    := true
+                inDownWave  := false
+                curWavePeak := rHigh
+            else
+                if rHigh > curWavePeak
+                    curWavePeak := rHigh
+        else
+            if inUpWave
+                if rHigh > curWavePeak
+                    curWavePeak := rHigh
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWavePeak
+                else if waveCount == 2
+                    wave2Peak := curWavePeak
+                    if wave2Peak > wave1Peak and wave2Peak > pendBreakPoint
+                        pendingState := 2
+                        waveConfBar  := bar_index - i
+                        waveConfHigh := rHigh
+                        waveConfLow  := rLow
+                    else
+                        pendingState := 0
+                    break
+                inUpWave    := false
+                inDownWave  := true
+                curWavePeak := na
+            else
+                inDownWave := true
+
+if rawBreakDown and pendingState != -2
+    pendingState   := -1
+    pendBreakPoint := sl1
+    pendSL         := shBeforeSL
+    pendSL_idx     := shBeforeSL_idx
+    pendBreak_idx  := sl1_idx
+    // Reset recent tracking (new cycle starts after break)
+    slRecentMin   := sl1
+    shRecentMax   := na
+    // Reset wave state
+    waveCount     := 0
+    wave1Peak     := na
+    wave2Peak     := na
+    inUpWave      := false
+    inDownWave    := false
+    curWavePeak   := na
+    curWaveTrough := na
+    // Retroactively scan bars from SL candle to current bar
+    for i = pivotLen - 1 to 0
+        if pendingState != -1
+            break
+        float rHigh  = high[i]
+        float rLow   = low[i]
+        bool  rBull  = close[i] >= open[i]
+        // SL check
+        if not na(pendSL) and rHigh >= pendSL
+            pendingState := 0
+            break
+        // Pre-confirm retest invalidation (SELL)
+        if not na(pendBreakPoint) and rHigh >= pendBreakPoint
+            pendingState := 0
+            break
+        // Wave tracking (same as Phase 1 SELL)
+        if not rBull
+            if not inDownWave
+                inDownWave    := true
+                inUpWave      := false
+                curWaveTrough := rLow
+            else
+                if rLow < curWaveTrough
+                    curWaveTrough := rLow
+        else
+            if inDownWave
+                if rLow < curWaveTrough
+                    curWaveTrough := rLow
+                waveCount += 1
+                if waveCount == 1
+                    wave1Peak := curWaveTrough
+                else if waveCount == 2
+                    wave2Peak := curWaveTrough
+                    if wave2Peak < wave1Peak and wave2Peak < pendBreakPoint
+                        pendingState := -2
+                        waveConfBar  := bar_index - i
+                        waveConfHigh := rHigh
+                        waveConfLow  := rLow
+                    else
+                        pendingState := 0
+                    break
+                inDownWave  := false
+                inUpWave    := true
+                curWaveTrough := na
+            else
+                inUpWave := true
+
+// ============================================================================
+// D) PLOTTING / UI
+// ============================================================================
+
+// -- Swing Points --
+plotshape(showSwings and not na(swingHigh), title = "Swing High",
+     style = shape.triangledown, location = location.abovebar,
+     color = colSwingHigh, offset = -pivotLen, size = size.tiny)
+
+plotshape(showSwings and not na(swingLow), title = "Swing Low",
+     style = shape.triangleup, location = location.belowbar,
+     color = colSwingLow, offset = -pivotLen, size = size.tiny)
+
+// -- Persistent Lines --
+var line  activeEntryLine = na
+var line  activeSLLine    = na
+
+f_terminateLines() =>
+    if not na(activeEntryLine)
+        line.set_x2(activeEntryLine, bar_index)
+    if not na(activeSLLine)
+        line.set_x2(activeSLLine, bar_index)
+
+// -- Confirmed BUY Retest --
+if confirmedBuy
+    if showBreakLine
+        f_terminateLines()
+        activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
+             xloc = xloc.bar_index, color = colEntryBuy,
+             style = line.style_dashed, width = 1)
+        activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
+             xloc = xloc.bar_index, color = colSL,
+             style = line.style_dashed, width = 1)
+
+    if showBreakLabel
+        label.new(confWaveBar, confWaveHigh, "Confirm Break",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_down, color = colBreakUp,
+             textcolor = color.white, size = size.tiny)
+
+// -- Confirmed SELL Retest --
+if confirmedSell
+    if showBreakLine
+        f_terminateLines()
+        activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
+             xloc = xloc.bar_index, color = colEntrySell,
+             style = line.style_dashed, width = 1)
+        activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
+             xloc = xloc.bar_index, color = colSL,
+             style = line.style_dashed, width = 1)
+
+    if showBreakLabel
+        label.new(confWaveBar, confWaveLow, "Confirm Break",
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_up, color = colBreakDown,
+             textcolor = color.white, size = size.tiny)
+
+// -- Extend active lines to the right every bar --
+if not na(activeEntryLine)
+    line.set_x2(activeEntryLine, bar_index)
+if not na(activeSLLine)
+    line.set_x2(activeSLLine, bar_index)
+
+// ============================================================================
+// E) ALERTS
+// ============================================================================
+alertcondition(confirmedBuy,                    title = "Wave Buy",    message = "MST Medio: BUY wave+retest entry on {{ticker}} @ {{close}}")
+alertcondition(confirmedSell,                   title = "Wave Sell",   message = "MST Medio: SELL wave+retest entry on {{ticker}} @ {{close}}")
+alertcondition(confirmedBuy or confirmedSell,   title = "Any Signal",  message = "MST Medio: Wave+retest entry on {{ticker}} @ {{close}}")
