@@ -1,19 +1,16 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
 // Indicator : MST Medio
-// Version   : v0.3
+// Version   : v0.4
 // Author    : MTS
 // Based on  : PA Break v0.7.0
-// Purpose   : Detect HH/LL breakouts → wait for CLOSE vượt W1 peak (confirm)
-//             → then wait for RETEST at SH/SL (Entry = đỉnh/đáy cũ).
-//             SH = sh0 (đỉnh cũ bị phá).
-//             W1 peak = highest high from break candle until first bearish candle
-//             (NOT sh1 pivot high — W1 = first impulse wave only).
+// Purpose   : Detect HH/LL breakouts → wait for CLOSE beyond W1 peak (confirm)
+//             → then wait for RETEST at SH/SL (Entry = old high/low).
+//             3-Phase Confirmation: Break → Confirm → Retest → Signal
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
-//             Break = HH/LL → close vượt W1 → retest → entry signal.
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
-     title      = "MST Medio v0.3",
+     title      = "MST Medio v0.4",
      shorttitle = "MST Medio",
      overlay    = true,
      max_labels_count = 500,
@@ -24,28 +21,36 @@ indicator(
 // ============================================================================
 // A) INPUTS
 // ============================================================================
-string GRP_CORE  = "Core"
-string GRP_STYLE = "Style"
+string GRP_SIGNAL = "Signal Detection"
+string GRP_VIS    = "Visual"
 
-pivotLen   = input.int(5,   "Pivot Lookback", minval = 2, maxval = 50, group = GRP_CORE,
-             tooltip = "Number of bars left/right to confirm a Swing High/Low.")
-breakMult  = input.float(0.25, "Break Strength (x Swing Range)", minval = 0, step = 0.25, group = GRP_CORE,
-             tooltip = "Break distance must be >= breakMult x previous swing range. 0 = filter OFF.")
-impulseMult = input.float(1.5, "Impulse Body (x Avg Body)", minval = 0, step = 0.25, group = GRP_CORE,
-             tooltip = "Nến break phải có thân >= impulseMult x body trung bình. 0 = OFF.")
+pivotLen   = input.int(5,   "Pivot Lookback", minval = 2, maxval = 50, group = GRP_SIGNAL,
+             tooltip = "Number of bars left and right to confirm a Swing High/Low pivot point.")
+breakMult  = input.float(0.25, "Break Strength", minval = 0, step = 0.25, group = GRP_SIGNAL,
+             tooltip = "Break distance must be ≥ breakMult × previous swing range. Set 0 to disable this filter.")
+impulseMult = input.float(1.5, "Impulse Body Filter", minval = 0, step = 0.25, group = GRP_SIGNAL,
+             tooltip = "The first candle closing beyond the old high/low must have body ≥ impulseMult × 20-bar average body. Set 0 to disable.")
 
-// Style
-showSwings     = input.bool(false, "Show Swing Points",     group = GRP_STYLE)
-showBreakLabel = input.bool(true,  "Show Break Labels",     group = GRP_STYLE)
-showBreakLine  = input.bool(true,  "Show Break Lines",      group = GRP_STYLE)
+// Visual
+showSwings     = input.bool(false, "Show Swing Points",       group = GRP_VIS)
+showBreakLabel = input.bool(true,  "Show Confirm Break Label", group = GRP_VIS,
+                 tooltip = "Show '▲ Confirm Break' / '▼ Confirm Break' label at the wave confirmation candle.")
+showBreakLine  = input.bool(true,  "Show Entry / SL / TP Lines", group = GRP_VIS,
+                 tooltip = "Show dashed lines for Entry, Stop Loss, and Take Profit levels.")
+showBoxes      = input.bool(true,  "Show Risk/Reward Zones",  group = GRP_VIS,
+                 tooltip = "Show colored boxes: red zone (Entry→SL) and green zone (Entry→TP).")
 
-colBreakUp   = input.color(color.new(color.green, 0),  "Break UP Label",     group = GRP_STYLE)
-colBreakDown = input.color(color.new(color.red, 0),    "Break DOWN Label",   group = GRP_STYLE)
-colEntryBuy  = input.color(color.new(color.blue, 0),   "Entry Buy Color",    group = GRP_STYLE)
-colEntrySell = input.color(color.new(#ff69b4, 0),      "Entry Sell Color",   group = GRP_STYLE)
-colSL        = input.color(color.new(color.yellow, 0), "SL Color",           group = GRP_STYLE)
-colSwingHigh = input.color(color.new(color.orange, 40), "Swing High Color",  group = GRP_STYLE)
-colSwingLow  = input.color(color.new(color.blue, 40),   "Swing Low Color",   group = GRP_STYLE)
+showPending    = input.bool(true,  "Show Pending State",      group = GRP_VIS,
+                 tooltip = "Show Entry line and W1 Peak/Trough line while waiting for confirmation.")
+
+colBreakUp   = input.color(color.new(#26a69a, 0),  "Break UP Color",     group = GRP_VIS)
+colBreakDown = input.color(color.new(#ef5350, 0),   "Break DOWN Color",   group = GRP_VIS)
+colEntryBuy  = input.color(color.new(#2196F3, 0),   "Entry Buy Color",    group = GRP_VIS)
+colEntrySell = input.color(color.new(#ff69b4, 0),   "Entry Sell Color",   group = GRP_VIS)
+colSL        = input.color(color.new(#FF9800, 0),   "Stop Loss Color",    group = GRP_VIS)
+colTP        = input.color(color.new(#4CAF50, 0),   "Take Profit Color",  group = GRP_VIS)
+colSwingHigh = input.color(color.new(color.orange, 40), "Swing High Color",  group = GRP_VIS)
+colSwingLow  = input.color(color.new(color.blue, 40),   "Swing Low Color",   group = GRP_VIS)
 
 // ============================================================================
 // B) CORE LOGIC
@@ -193,6 +198,7 @@ float confSL         = na
 int   confSL_idx     = na
 int   confBreak_idx  = na
 float confBreakPt    = na
+float confW1Peak     = na  // W1 peak value for TP reference
 int   confWaveBar    = na  // bar where wave was confirmed
 float confWaveHigh   = na  // high of wave confirm bar
 float confWaveLow    = na  // low of wave confirm bar
@@ -200,14 +206,41 @@ float confWaveLow    = na  // low of wave confirm bar
 // -- Persistent Lines (declared early for f_terminateLines) --
 var line  activeEntryLine  = na
 var line  activeSLLine     = na
+var line  activeTPLine     = na
 var float activeEntryPrice = na   // Entry price of last confirmed signal
+var float activeTPPrice    = na   // TP price (confirm break high/low)
 var int   activeSignalDir  = 0    // 1 = BUY, -1 = SELL
+
+// -- Pending state lines --
+var line  pendEntryLine    = na   // Dashed line at pending Entry level
+var line  pendW1Line       = na   // Dashed line at W1 Peak/Trough level
+var label pendPhaseLabel   = na   // "Phase 1" / "Phase 2" label
+
+// -- Risk/Reward boxes --
+var box   activeRiskBox    = na   // Entry → SL (red zone)
+var box   activeRewardBox  = na   // Entry → TP (green zone)
 
 f_terminateLines() =>
     if not na(activeEntryLine)
         line.set_x2(activeEntryLine, bar_index)
     if not na(activeSLLine)
         line.set_x2(activeSLLine, bar_index)
+    if not na(activeTPLine)
+        line.set_x2(activeTPLine, bar_index)
+
+f_clearPending() =>
+    if not na(pendEntryLine)
+        line.delete(pendEntryLine)
+    if not na(pendW1Line)
+        line.delete(pendW1Line)
+    if not na(pendPhaseLabel)
+        label.delete(pendPhaseLabel)
+
+f_clearBoxes() =>
+    if not na(activeRiskBox)
+        box.delete(activeRiskBox)
+    if not na(activeRewardBox)
+        box.delete(activeRewardBox)
 
 // -- Post-signal Entry touch → terminate lines --
 // Nến bất kỳ sau tín hiệu chạm Entry → kết thúc đường
@@ -217,7 +250,9 @@ if not na(activeEntryLine) and not na(activeEntryPrice) and activeSignalDir != 0
         f_terminateLines()
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
 
 // -- Phase 2: Retest at Entry (sh0 for BUY, sl0 for SELL) --
@@ -226,10 +261,16 @@ if pendingState == 2 and not na(pendBreakPoint)
     if not na(pendSL) and low <= pendSL
         pendingState := 0
         f_terminateLines()
+        f_clearPending()
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
+        pendEntryLine    := na
+        pendW1Line       := na
+        pendPhaseLabel   := na
     else if low <= pendBreakPoint
         // Retest Entry → BUY signal!
         confirmedBuy  := true
@@ -238,6 +279,7 @@ if pendingState == 2 and not na(pendBreakPoint)
         confSL_idx    := pendSL_idx
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
+        confW1Peak    := pendW1Peak
         confWaveBar   := waveConfBar
         confWaveHigh  := waveConfHigh
         confWaveLow   := waveConfLow
@@ -246,20 +288,32 @@ if pendingState == 2 and not na(pendBreakPoint)
     else if not na(pendW1Trough) and low <= pendW1Trough
         pendingState := 0
         f_terminateLines()
+        f_clearPending()
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
+        pendEntryLine    := na
+        pendW1Line       := na
+        pendPhaseLabel   := na
 
 if pendingState == -2 and not na(pendBreakPoint)
     // SL invalidation
     if not na(pendSL) and high >= pendSL
         pendingState := 0
         f_terminateLines()
+        f_clearPending()
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
+        pendEntryLine    := na
+        pendW1Line       := na
+        pendPhaseLabel   := na
     else if high >= pendBreakPoint
         // Retest Entry → SELL signal!
         confirmedSell := true
@@ -268,6 +322,7 @@ if pendingState == -2 and not na(pendBreakPoint)
         confSL_idx    := pendSL_idx
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
+        confW1Peak    := pendW1Peak
         confWaveBar   := waveConfBar
         confWaveHigh  := waveConfHigh
         confWaveLow   := waveConfLow
@@ -276,10 +331,16 @@ if pendingState == -2 and not na(pendBreakPoint)
     else if not na(pendW1Trough) and high >= pendW1Trough
         pendingState := 0
         f_terminateLines()
+        f_clearPending()
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
+        pendEntryLine    := na
+        pendW1Line       := na
+        pendPhaseLabel   := na
 
 // -- Phase 1: Wait for CLOSE > W1 peak (BUY) or CLOSE < W1 trough (SELL) --
 if pendingState == 1
@@ -324,10 +385,19 @@ if pendingState == -1
 if rawBreakUp and pendingState != 2
     // Terminate old signal's lines when new tracking starts
     f_terminateLines()
+    f_clearPending()
+    f_clearBoxes()
     activeEntryLine  := na
     activeSLLine     := na
+    activeTPLine     := na
     activeEntryPrice := na
+    activeTPPrice    := na
     activeSignalDir  := 0
+    pendEntryLine    := na
+    pendW1Line       := na
+    pendPhaseLabel   := na
+    activeRiskBox    := na
+    activeRewardBox  := na
     // --- Find W1 peak: highest high from break candle until first bearish ---
     // Also track lowest low during W1 impulse for W1 Trough initialization
     float _w1Peak    = na
@@ -402,6 +472,7 @@ if rawBreakUp and pendingState != 2
                     confSL_idx    := pendSL_idx
                     confBreak_idx := pendBreak_idx
                     confBreakPt   := pendBreakPoint
+                    confW1Peak    := pendW1Peak
                     confWaveBar   := waveConfBar
                     confWaveHigh  := waveConfHigh
                     confWaveLow   := waveConfLow
@@ -417,10 +488,19 @@ if rawBreakUp and pendingState != 2
 if rawBreakDown and pendingState != -2
     // Terminate old signal's lines when new tracking starts
     f_terminateLines()
+    f_clearPending()
+    f_clearBoxes()
     activeEntryLine  := na
     activeSLLine     := na
+    activeTPLine     := na
     activeEntryPrice := na
+    activeTPPrice    := na
     activeSignalDir  := 0
+    pendEntryLine    := na
+    pendW1Line       := na
+    pendPhaseLabel   := na
+    activeRiskBox    := na
+    activeRewardBox  := na
     // --- Find W1 trough: lowest low from break candle until first bullish ---
     // Also track highest high during W1 impulse for W1 Trough initialization (SELL)
     float _w1Trough   = na
@@ -494,6 +574,7 @@ if rawBreakDown and pendingState != -2
                     confSL_idx    := pendSL_idx
                     confBreak_idx := pendBreak_idx
                     confBreakPt   := pendBreakPoint
+                    confW1Peak    := pendW1Peak
                     confWaveBar   := waveConfBar
                     confWaveHigh  := waveConfHigh
                     confWaveLow   := waveConfLow
@@ -520,20 +601,41 @@ plotshape(showSwings and not na(swingLow), title = "Swing Low",
 
 // -- Confirmed BUY Retest --
 if confirmedBuy
+    // TP = high of Confirm Break candle
+    float _tp = confWaveHigh
+    float _risk = math.abs(confEntry - confSL)
+    float _reward = math.abs(_tp - confEntry)
+    float _rr = _risk > 0 ? _reward / _risk : 0
+
     if showBreakLine
         f_terminateLines()
+        f_clearPending()
+        f_clearBoxes()
+        pendEntryLine  := na
+        pendW1Line     := na
+        pendPhaseLabel := na
+
         activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
              xloc = xloc.bar_index, color = colEntryBuy,
              style = line.style_dashed, width = 1)
         activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
              xloc = xloc.bar_index, color = colSL,
              style = line.style_dashed, width = 1)
+        activeTPLine := line.new(confBreak_idx, _tp, bar_index, _tp,
+             xloc = xloc.bar_index, color = colTP,
+             style = line.style_dashed, width = 1)
+
         // Signal bar = retest bar → lines are fixed, don't extend
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
-        // Entry & SL labels on lines
+        activeRiskBox    := na
+        activeRewardBox  := na
+
+        // Labels
         label.new(bar_index, confEntry, "Entry",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntryBuy,
@@ -542,29 +644,63 @@ if confirmedBuy
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colSL,
              textcolor = color.white, size = size.tiny)
+        label.new(bar_index, _tp, str.format("TP ({0,number,#.#}R)", _rr),
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_left, color = colTP,
+             textcolor = color.white, size = size.tiny)
+
+    // Risk/Reward boxes
+    if showBoxes
+        box.new(confBreak_idx, confEntry, bar_index, confSL,
+             xloc = xloc.bar_index, border_color = color.new(colSL, 60),
+             bgcolor = color.new(colSL, 90), border_width = 0)
+        box.new(confBreak_idx, _tp, bar_index, confEntry,
+             xloc = xloc.bar_index, border_color = color.new(colTP, 60),
+             bgcolor = color.new(colTP, 90), border_width = 0)
 
     if showBreakLabel
-        label.new(confWaveBar, confWaveHigh, "Confirm Break",
+        label.new(confWaveBar, confWaveHigh, "▲ Confirm Break",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_down, color = colBreakUp,
              textcolor = color.white, size = size.tiny)
 
 // -- Confirmed SELL Retest --
 if confirmedSell
+    // TP = low of Confirm Break candle
+    float _tp = confWaveLow
+    float _risk = math.abs(confSL - confEntry)
+    float _reward = math.abs(confEntry - _tp)
+    float _rr = _risk > 0 ? _reward / _risk : 0
+
     if showBreakLine
         f_terminateLines()
+        f_clearPending()
+        f_clearBoxes()
+        pendEntryLine  := na
+        pendW1Line     := na
+        pendPhaseLabel := na
+
         activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
              xloc = xloc.bar_index, color = colEntrySell,
              style = line.style_dashed, width = 1)
         activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
              xloc = xloc.bar_index, color = colSL,
              style = line.style_dashed, width = 1)
+        activeTPLine := line.new(confBreak_idx, _tp, bar_index, _tp,
+             xloc = xloc.bar_index, color = colTP,
+             style = line.style_dashed, width = 1)
+
         // Signal bar = retest bar → lines are fixed, don't extend
         activeEntryLine  := na
         activeSLLine     := na
+        activeTPLine     := na
         activeEntryPrice := na
+        activeTPPrice    := na
         activeSignalDir  := 0
-        // Entry & SL labels on lines
+        activeRiskBox    := na
+        activeRewardBox  := na
+
+        // Labels
         label.new(bar_index, confEntry, "Entry",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntrySell,
@@ -573,9 +709,22 @@ if confirmedSell
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colSL,
              textcolor = color.white, size = size.tiny)
+        label.new(bar_index, _tp, str.format("TP ({0,number,#.#}R)", _rr),
+             xloc = xloc.bar_index, yloc = yloc.price,
+             style = label.style_label_left, color = colTP,
+             textcolor = color.white, size = size.tiny)
+
+    // Risk/Reward boxes
+    if showBoxes
+        box.new(confBreak_idx, confSL, bar_index, confEntry,
+             xloc = xloc.bar_index, border_color = color.new(colSL, 60),
+             bgcolor = color.new(colSL, 90), border_width = 0)
+        box.new(confBreak_idx, confEntry, bar_index, _tp,
+             xloc = xloc.bar_index, border_color = color.new(colTP, 60),
+             bgcolor = color.new(colTP, 90), border_width = 0)
 
     if showBreakLabel
-        label.new(confWaveBar, confWaveLow, "Confirm Break",
+        label.new(confWaveBar, confWaveLow, "▼ Confirm Break",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_up, color = colBreakDown,
              textcolor = color.white, size = size.tiny)
@@ -585,10 +734,49 @@ if not na(activeEntryLine)
     line.set_x2(activeEntryLine, bar_index)
 if not na(activeSLLine)
     line.set_x2(activeSLLine, bar_index)
+if not na(activeTPLine)
+    line.set_x2(activeTPLine, bar_index)
+
+// -- Pending State Visualization --
+if showPending and pendingState != 0
+    f_clearPending()
+    bool _isBuy = pendingState > 0
+    string _phaseText = math.abs(pendingState) == 1 ? "Phase 1" : "Phase 2"
+    color _pendColor = _isBuy ? color.new(colEntryBuy, 50) : color.new(colEntrySell, 50)
+    color _w1Color   = color.new(colTP, 50)
+
+    // Entry level line (dotted)
+    if not na(pendBreakPoint) and not na(pendBreak_idx)
+        pendEntryLine := line.new(pendBreak_idx, pendBreakPoint, bar_index, pendBreakPoint,
+             xloc = xloc.bar_index, color = _pendColor,
+             style = line.style_dotted, width = 1)
+
+    // W1 Peak/Trough line (dotted)
+    if not na(pendW1Peak)
+        int _w1Start = not na(pendBreak_idx) ? pendBreak_idx : bar_index - 20
+        pendW1Line := line.new(_w1Start, pendW1Peak, bar_index, pendW1Peak,
+             xloc = xloc.bar_index, color = _w1Color,
+             style = line.style_dotted, width = 1)
+
+    // Phase label
+    pendPhaseLabel := label.new(bar_index, pendBreakPoint,
+         _phaseText + (_isBuy ? " BUY" : " SELL"),
+         xloc = xloc.bar_index, yloc = yloc.price,
+         style = _isBuy ? label.style_label_up : label.style_label_down,
+         color = color.new(_pendColor, 30),
+         textcolor = color.white, size = size.tiny)
+else if showPending and pendingState == 0
+    f_clearPending()
+    pendEntryLine  := na
+    pendW1Line     := na
+    pendPhaseLabel := na
 
 // ============================================================================
 // E) ALERTS
 // ============================================================================
-alertcondition(confirmedBuy,                    title = "Wave Buy",    message = "MST Medio: BUY wave+retest entry on {{ticker}} @ {{close}}")
-alertcondition(confirmedSell,                   title = "Wave Sell",   message = "MST Medio: SELL wave+retest entry on {{ticker}} @ {{close}}")
-alertcondition(confirmedBuy or confirmedSell,   title = "Any Signal",  message = "MST Medio: Wave+retest entry on {{ticker}} @ {{close}}")
+alertcondition(confirmedBuy,  title = "BUY Signal",
+     message = "MST Medio BUY | Entry={{close}} | {{ticker}} {{interval}}")
+alertcondition(confirmedSell, title = "SELL Signal",
+     message = "MST Medio SELL | Entry={{close}} | {{ticker}} {{interval}}")
+alertcondition(confirmedBuy or confirmedSell, title = "Any Signal",
+     message = "MST Medio Signal | {{ticker}} {{interval}}")
