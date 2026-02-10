@@ -174,6 +174,7 @@ if isNewLL and not na(shBeforeSL)
 var int   pendingState   = 0
 var float pendBreakPoint = na   // SH (sh0) or SL (sl0) = Entry level
 var float pendW1Peak     = na   // W1 peak (sh1) or W1 trough (sl1) = mốc cần vượt
+var float pendW1Trough   = na   // Đáy W1 (BUY) or Đỉnh W1 (SELL) — dùng để terminate lines
 var float pendSL         = na   // Stop Loss level
 var int   pendSL_idx     = na
 var int   pendBreak_idx  = na
@@ -200,12 +201,26 @@ int   confWaveBar    = na  // bar where wave was confirmed
 float confWaveHigh   = na  // high of wave confirm bar
 float confWaveLow    = na  // low of wave confirm bar
 
+// -- Persistent Lines (declared early for f_terminateLines) --
+var line  activeEntryLine = na
+var line  activeSLLine    = na
+
+f_terminateLines() =>
+    if not na(activeEntryLine)
+        line.set_x2(activeEntryLine, bar_index)
+    if not na(activeSLLine)
+        line.set_x2(activeSLLine, bar_index)
+
 // -- Phase 2: Retest at Entry (sh0 for BUY, sl0 for SELL) --
 if pendingState == 2 and not na(pendBreakPoint)
     // SL invalidation
     if not na(pendSL) and low <= pendSL
         pendingState := 0
+        f_terminateLines()
+        activeEntryLine := na
+        activeSLLine    := na
     else if low <= pendBreakPoint
+        // Retest Entry → BUY signal!
         confirmedBuy  := true
         confEntry     := pendBreakPoint
         confSL        := pendSL
@@ -216,12 +231,22 @@ if pendingState == 2 and not na(pendBreakPoint)
         confWaveHigh  := waveConfHigh
         confWaveLow   := waveConfLow
         pendingState  := 0
+    // W1 trough invalidation — low chạm dưới chân sóng W1 → kết thúc
+    else if not na(pendW1Trough) and low <= pendW1Trough
+        pendingState := 0
+        f_terminateLines()
+        activeEntryLine := na
+        activeSLLine    := na
 
 if pendingState == -2 and not na(pendBreakPoint)
     // SL invalidation
     if not na(pendSL) and high >= pendSL
         pendingState := 0
+        f_terminateLines()
+        activeEntryLine := na
+        activeSLLine    := na
     else if high >= pendBreakPoint
+        // Retest Entry → SELL signal!
         confirmedSell := true
         confEntry     := pendBreakPoint
         confSL        := pendSL
@@ -232,10 +257,22 @@ if pendingState == -2 and not na(pendBreakPoint)
         confWaveHigh  := waveConfHigh
         confWaveLow   := waveConfLow
         pendingState  := 0
+    // W1 peak invalidation — high chạm trên đỉnh W1 (SELL) → kết thúc
+    else if not na(pendW1Trough) and high >= pendW1Trough
+        pendingState := 0
+        f_terminateLines()
+        activeEntryLine := na
+        activeSLLine    := na
+        confWaveHigh  := waveConfHigh
+        confWaveLow   := waveConfLow
+        pendingState  := 0
 
 // -- Phase 1: Wait for CLOSE > W1 peak (BUY) or CLOSE < W1 trough (SELL) --
 if pendingState == 1
     // BUY: chờ close > W1 peak (sh1)
+    // Track đáy W1 (lowest low từ break đến confirm)
+    if na(pendW1Trough) or low < pendW1Trough
+        pendW1Trough := low
     if not na(pendSL) and low <= pendSL
         // SL hit → cancel
         pendingState := 0
@@ -251,6 +288,9 @@ if pendingState == 1
 
 if pendingState == -1
     // SELL: chờ close < W1 trough (sl1)
+    // Track đỉnh W1 (highest high từ break đến confirm)
+    if na(pendW1Trough) or high > pendW1Trough
+        pendW1Trough := high
     if not na(pendSL) and high >= pendSL
         // SL hit → cancel
         pendingState := 0
@@ -270,6 +310,7 @@ if rawBreakUp and pendingState != 2
     pendingState   := 1
     pendBreakPoint := sh0       // SH = Entry level
     pendW1Peak     := sh1       // W1 peak = mốc cần vượt
+    pendW1Trough   := na        // Will track lowest low during Phase 1
     pendSL         := slBeforeSH
     pendSL_idx     := slBeforeSH_idx
     pendBreak_idx  := sh0_idx   // Entry line starts from sh0
@@ -284,6 +325,9 @@ if rawBreakUp and pendingState != 2
         float rHigh  = high[i]
         float rLow   = low[i]
         float rClose = close[i]
+        // Track W1 trough (lowest low)
+        if na(pendW1Trough) or rLow < pendW1Trough
+            pendW1Trough := rLow
         // SL check
         if not na(pendSL) and rLow <= pendSL
             pendingState := 0
@@ -305,6 +349,7 @@ if rawBreakDown and pendingState != -2
     pendingState   := -1
     pendBreakPoint := sl0       // SL = Entry level
     pendW1Peak     := sl1       // W1 trough = mốc cần vượt (xuống)
+    pendW1Trough   := na        // Will track highest high during Phase 1 (SELL)
     pendSL         := shBeforeSL
     pendSL_idx     := shBeforeSL_idx
     pendBreak_idx  := sl0_idx   // Entry line starts from sl0
@@ -318,6 +363,9 @@ if rawBreakDown and pendingState != -2
         float rHigh  = high[i]
         float rLow   = low[i]
         float rClose = close[i]
+        // Track W1 peak (highest high) for SELL
+        if na(pendW1Trough) or rHigh > pendW1Trough
+            pendW1Trough := rHigh
         // SL check
         if not na(pendSL) and rHigh >= pendSL
             pendingState := 0
@@ -346,16 +394,6 @@ plotshape(showSwings and not na(swingHigh), title = "Swing High",
 plotshape(showSwings and not na(swingLow), title = "Swing Low",
      style = shape.triangleup, location = location.belowbar,
      color = colSwingLow, offset = -pivotLen, size = size.tiny)
-
-// -- Persistent Lines --
-var line  activeEntryLine = na
-var line  activeSLLine    = na
-
-f_terminateLines() =>
-    if not na(activeEntryLine)
-        line.set_x2(activeEntryLine, bar_index)
-    if not na(activeSLLine)
-        line.set_x2(activeSLLine, bar_index)
 
 // -- Confirmed BUY Retest --
 if confirmedBuy

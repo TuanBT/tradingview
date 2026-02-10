@@ -11,6 +11,7 @@
 - **Bỏ wave counting phức tạp** — Không đếm W1/W2 bằng candle color nữa
 - **Entry/SL labels** — Thêm chữ "Entry" và "SL" trên các đường nét đứt
 - **Retroactive scan** — Đơn giản hóa: chỉ check close > W1 peak trong pivot window
+- **Line termination** — Đường Entry/SL kết thúc khi close phá qua chân sóng W1 (hoặc SL hit)
 
 ### Logic mới:
 1. Phát hiện HH (sh1 > sh0) → sh0 = SH = Entry, sh1 = W1 peak
