@@ -1,0 +1,91 @@
+[b]MST Medio — 3-Phase Price Action Confirmation[/b]
+
+MST Medio is a structured price action indicator that detects high-probability reversal entries using a 3-phase confirmation process: Break → Confirm → Retest. It waits for a confirmed Higher High / Lower Low, validates the impulse wave, then triggers only when price retests the key level.
+
+No repainting. No lagging indicators. Pure price action logic built on swing structure.
+
+────────────────
+
+[b]How It Works[/b]
+
+[b]Phase 1 — Break[/b]
+Price forms a Higher High (HH) above the previous Swing High, or a Lower Low (LL) below the previous Swing Low. The break must pass two filters:
+[list]
+[*][b]Break Strength[/b] — The break distance must exceed a minimum percentage of the previous swing range (configurable, default 0.25×).
+[*][b]Impulse Body Filter[/b] — The first candle closing beyond the old high/low must have a body ≥ 1.5× the 20-bar average body. This ensures the break is driven by momentum, not a weak drift.
+[/list]
+The indicator then identifies the W1 impulse wave — the highest high (BUY) or lowest low (SELL) from the break candle until the first opposing candle.
+
+[b]Phase 2 — Confirm[/b]
+After the impulse wave, price must pull back and then close beyond the W1 peak (for BUY) or below the W1 trough (for SELL). This confirms that momentum has resumed after the correction.
+
+Invalidation rules:
+[list]
+[*]Price returns to the entry level (old SH/SL) before confirmation → structure broken, cancel.
+[*]Price hits the Stop Loss level → cancel.
+[/list]
+
+[b]Phase 3 — Retest Entry[/b]
+Once confirmed, the indicator waits for price to retest the original Swing High (BUY) or Swing Low (SELL). This is your entry point — buying at the old resistance turned support, or selling at the old support turned resistance.
+
+Invalidation rules:
+[list]
+[*]Price hits Stop Loss → cancel.
+[*]Price breaks below the W1 trough (BUY) or above the W1 peak (SELL) → cancel.
+[/list]
+
+────────────────
+
+[b]Visual Elements[/b]
+
+[list]
+[*][b]Entry / SL / TP lines[/b] (dashed) — Drawn at signal confirmation with labels showing levels and R:R ratio.
+[*][b]Risk/Reward zones[/b] — Colored boxes: red zone (Entry → SL) and green zone (Entry → TP) for instant visual assessment.
+[*][b]Confirm Break label[/b] — "▲ Confirm Break" / "▼ Confirm Break" at the wave confirmation candle.
+[*][b]Pending state[/b] — Dotted lines and phase labels ("Phase 1 BUY", "Phase 2 SELL") showing the indicator is tracking a potential setup before it triggers.
+[*][b]Swing markers[/b] (optional) — Small triangles at detected pivot highs and lows.
+[/list]
+
+────────────────
+
+[b]Take Profit Logic[/b]
+
+TP is placed at the high of the Confirm Break candle (BUY) or the low of the Confirm Break candle (SELL). This represents the point where momentum was confirmed — a natural target that aligns with the structure of the move.
+
+────────────────
+
+[b]Inputs[/b]
+
+[list]
+[*][b]Pivot Lookback[/b] (default: 5) — Bars left/right to confirm a swing point. Higher values = fewer but stronger pivots.
+[*][b]Break Strength[/b] (default: 0.25) — Break distance must be ≥ this multiple of the previous swing range. Set 0 to disable.
+[*][b]Impulse Body Filter[/b] (default: 1.5) — The break candle body must be ≥ this multiple of the 20-bar average body. Set 0 to disable.
+[*][b]Show Entry / SL / TP Lines[/b] — Toggle dashed level lines and labels.
+[*][b]Show Risk/Reward Zones[/b] — Toggle colored risk/reward boxes.
+[*][b]Show Pending State[/b] — Toggle the dotted lines and phase labels for setups being tracked.
+[*][b]Show Confirm Break Label[/b] — Toggle the confirmation label.
+[*][b]Show Swing Points[/b] — Toggle swing high/low markers on the chart.
+[*]Full color customization for all visual elements.
+[/list]
+
+────────────────
+
+[b]Alerts[/b]
+
+[list]
+[*][b]BUY Signal[/b] — Fires when Phase 3 retest is triggered on a bullish setup.
+[*][b]SELL Signal[/b] — Fires when Phase 3 retest is triggered on a bearish setup.
+[*][b]Any Signal[/b] — Fires on either direction.
+[/list]
+
+────────────────
+
+[b]Notes[/b]
+
+[list]
+[*]Works on [b]all timeframes[/b] and all instruments.
+[*][b]Non-repainting[/b] — All signals use confirmed (closed) pivots. No lookahead.
+[*]This is a [b]detection tool[/b], not a strategy. Use it alongside your own risk management and confluence analysis.
+[*]Best suited for trending markets where HH/LL structures form clean impulse waves.
+[*]The 3-phase confirmation significantly reduces false signals compared to raw breakout detection.
+[/list]

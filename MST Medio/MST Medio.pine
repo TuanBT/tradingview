@@ -1,16 +1,15 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
 // Indicator : MST Medio
-// Version   : v0.4
-// Author    : MTS
-// Based on  : PA Break v0.7.0
+// Version   : v1.0
+// Author    : Tuan
 // Purpose   : Detect HH/LL breakouts → wait for CLOSE beyond W1 peak (confirm)
 //             → then wait for RETEST at SH/SL (Entry = old high/low).
 //             3-Phase Confirmation: Break → Confirm → Retest → Signal
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
-     title      = "MST Medio v0.4",
+     title      = "MST Medio v1.0",
      shorttitle = "MST Medio",
      overlay    = true,
      max_labels_count = 500,
