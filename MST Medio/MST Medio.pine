@@ -198,8 +198,10 @@ float confWaveHigh   = na  // high of wave confirm bar
 float confWaveLow    = na  // low of wave confirm bar
 
 // -- Persistent Lines (declared early for f_terminateLines) --
-var line  activeEntryLine = na
-var line  activeSLLine    = na
+var line  activeEntryLine  = na
+var line  activeSLLine     = na
+var float activeEntryPrice = na   // Entry price of last confirmed signal
+var int   activeSignalDir  = 0    // 1 = BUY, -1 = SELL
 
 f_terminateLines() =>
     if not na(activeEntryLine)
@@ -207,14 +209,27 @@ f_terminateLines() =>
     if not na(activeSLLine)
         line.set_x2(activeSLLine, bar_index)
 
+// -- Post-signal Entry touch → terminate lines --
+// Nến bất kỳ sau tín hiệu chạm Entry → kết thúc đường
+if not na(activeEntryLine) and not na(activeEntryPrice) and activeSignalDir != 0
+    bool _touchEntry = (activeSignalDir == 1 and low <= activeEntryPrice) or (activeSignalDir == -1 and high >= activeEntryPrice)
+    if _touchEntry
+        f_terminateLines()
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
+
 // -- Phase 2: Retest at Entry (sh0 for BUY, sl0 for SELL) --
 if pendingState == 2 and not na(pendBreakPoint)
     // SL invalidation
     if not na(pendSL) and low <= pendSL
         pendingState := 0
         f_terminateLines()
-        activeEntryLine := na
-        activeSLLine    := na
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
     else if low <= pendBreakPoint
         // Retest Entry → BUY signal!
         confirmedBuy  := true
@@ -231,16 +246,20 @@ if pendingState == 2 and not na(pendBreakPoint)
     else if not na(pendW1Trough) and low <= pendW1Trough
         pendingState := 0
         f_terminateLines()
-        activeEntryLine := na
-        activeSLLine    := na
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
 
 if pendingState == -2 and not na(pendBreakPoint)
     // SL invalidation
     if not na(pendSL) and high >= pendSL
         pendingState := 0
         f_terminateLines()
-        activeEntryLine := na
-        activeSLLine    := na
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
     else if high >= pendBreakPoint
         // Retest Entry → SELL signal!
         confirmedSell := true
@@ -257,8 +276,10 @@ if pendingState == -2 and not na(pendBreakPoint)
     else if not na(pendW1Trough) and high >= pendW1Trough
         pendingState := 0
         f_terminateLines()
-        activeEntryLine := na
-        activeSLLine    := na
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
 
 // -- Phase 1: Wait for CLOSE > W1 peak (BUY) or CLOSE < W1 trough (SELL) --
 if pendingState == 1
@@ -301,6 +322,12 @@ if pendingState == -1
 // SH = sh0 (đỉnh cũ = Entry)
 // W1 peak = highest high from break candle until first bearish candle
 if rawBreakUp and pendingState != 2
+    // Terminate old signal's lines when new tracking starts
+    f_terminateLines()
+    activeEntryLine  := na
+    activeSLLine     := na
+    activeEntryPrice := na
+    activeSignalDir  := 0
     // --- Find W1 peak: highest high from break candle until first bearish ---
     // Also track lowest low during W1 impulse for W1 Trough initialization
     float _w1Peak    = na
@@ -388,6 +415,12 @@ if rawBreakUp and pendingState != 2
 
 // SL (đáy cũ = Entry), W1 trough = first impulse wave low
 if rawBreakDown and pendingState != -2
+    // Terminate old signal's lines when new tracking starts
+    f_terminateLines()
+    activeEntryLine  := na
+    activeSLLine     := na
+    activeEntryPrice := na
+    activeSignalDir  := 0
     // --- Find W1 trough: lowest low from break candle until first bullish ---
     // Also track highest high during W1 impulse for W1 Trough initialization (SELL)
     float _w1Trough   = na
@@ -495,6 +528,11 @@ if confirmedBuy
         activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
              xloc = xloc.bar_index, color = colSL,
              style = line.style_dashed, width = 1)
+        // Signal bar = retest bar → lines are fixed, don't extend
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
         // Entry & SL labels on lines
         label.new(bar_index, confEntry, "Entry",
              xloc = xloc.bar_index, yloc = yloc.price,
@@ -521,6 +559,11 @@ if confirmedSell
         activeSLLine := line.new(confSL_idx, confSL, bar_index, confSL,
              xloc = xloc.bar_index, color = colSL,
              style = line.style_dashed, width = 1)
+        // Signal bar = retest bar → lines are fixed, don't extend
+        activeEntryLine  := na
+        activeSLLine     := na
+        activeEntryPrice := na
+        activeSignalDir  := 0
         // Entry & SL labels on lines
         label.new(bar_index, confEntry, "Entry",
              xloc = xloc.bar_index, yloc = yloc.price,
