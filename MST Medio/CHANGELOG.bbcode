@@ -1,0 +1,22 @@
+[b]Changelog — MST Medio[/b]
+
+[b]v2.0[/b] (2026-02-11)
+[list]
+[*][b]Simplified to 2-phase flow[/b] — Removed Phase 3 (Retest). Signal now fires immediately when confirmation is detected (close beyond W1 peak/trough), without waiting for price to return to the entry level.
+[*][b]Direct confirmation[/b] — When price closes above W1 peak (BUY) or below W1 trough (SELL), Entry/SL/TP are determined instantly. No intermediate "Phase 2" waiting state.
+[*][b]Retroactive scan updated[/b] — Historical scan from W1 bar now confirms directly without Phase 2 retest check.
+[*][b]Pending visualization improved[/b] — SL line now shown during pending state. Labels changed from "Phase 1/2" to "Pending BUY/SELL". W1 line always visible while pending.
+[*][b]Cleaner state machine[/b] — States reduced from 5 (0, 1, 2, -1, -2) to 3 (0 = idle, 1 = pending BUY, -1 = pending SELL).
+[*][b]Raw break guards simplified[/b] — New break detection no longer blocked by Phase 2 state.
+[/list]
+
+[b]v1.0[/b] (2026-02-04)
+[list]
+[*]Initial release.
+[*]3-phase price action confirmation: Break → Confirm → Retest.
+[*]W1 impulse wave detection with configurable Break Strength and Impulse Body filters.
+[*]Entry/SL/TP lines, Risk/Reward boxes, Confirm Break labels.
+[*]Pending state visualization with Phase 1/Phase 2 dotted lines.
+[*]Swing high/low markers.
+[*]Alerts for BUY, SELL, and Any Signal.
+[/list]

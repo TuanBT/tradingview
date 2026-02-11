@@ -1,7 +1,7 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
 // Indicator : MST Medio
-// Version   : v1.0
+// Version   : v2.0
 // Author    : Tuan
 // Purpose   : Detect HH/LL breakouts → wait for CLOSE beyond W1 peak (confirm)
 //             → then wait for RETEST at SH/SL (Entry = old high/low).
@@ -9,7 +9,7 @@
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
-     title      = "MST Medio v1.0",
+     title      = "MST Medio v2.0",
      shorttitle = "MST Medio",
      overlay    = true,
      max_labels_count = 500,
@@ -98,8 +98,8 @@ if not na(swingLow)
 bool isNewHH = not na(swingHigh) and not na(sh0) and sh1 > sh0
 bool isNewLL = not na(swingLow)  and not na(sl0) and sl1 < sl0
 
-// -- Impulse Body Filter (nến break phải có thân dài) --
-// Tìm nến đầu tiên CLOSE vượt đỉnh/đáy cũ, check body >= impulseMult × avg
+// -- Impulse Body Filter (break candle must have large body) --
+// Find the first candle that CLOSE beyond old high/low, check body >= impulseMult × avg
 float _avgBody = ta.sma(math.abs(close - open), 20)
 
 if isNewHH and impulseMult > 0
@@ -150,31 +150,26 @@ if isNewLL and not na(shBeforeSL)
 // ============================================================================
 // C) 3-PHASE CONFIRMATION: BREAK → CONFIRM → RETEST ENTRY
 // ============================================================================
-// Phương pháp:
-//   1. Tìm SH (đỉnh cũ = sh0). Sau SH có break lớn tạo HH (sh1 > sh0).
+// Method:
+//   1. Find SH (old high = sh0). After SH, a large break creates HH (sh1 > sh0).
 //      → W1 peak = highest high from break candle until first bearish candle
-//        (sóng impulse đầu tiên, KHÔNG phải sh1 pivot high)
+//        (first impulse wave, NOT the sh1 pivot high)
 //      → sh0 = SH = Entry level
-//   2. Phase 1: Chờ giá pullback rồi CLOSE vượt W1 peak → Confirm
-//      → Cancel nếu chân sóng W1 (low) chạm SH (sh0) → phá cấu trúc
-//      → Cancel nếu giá chạm SL
-//   3. Phase 2: Chờ retest tại SH (sh0) → Entry
-//      → Cancel nếu giá chạm SL
-//      → Cancel nếu giá break W1 trough
+//   2. Wait for pullback then CLOSE beyond W1 peak → Confirmed! → Entry/SL/TP
+//      → Cancel if W1 wave trough (low) touches SH (sh0) → structure broken
+//      → Cancel if price hits SL
 //
-// SELL: ngược lại — SL (đáy cũ = sl0), LL, W1 trough = first impulse wave low
+// SELL: mirror logic — SL (old low = sl0), LL, W1 trough = first impulse wave low
 //
 // States:
 //   0 = idle
-//   1 = phase 1: chờ confirm BUY (close > W1 peak)
-//   2 = phase 2: chờ retest BUY (price <= Entry)
-//  -1 = phase 1: chờ confirm SELL (close < W1 trough)
-//  -2 = phase 2: chờ retest SELL (price >= Entry)
+//   1 = waiting for confirm BUY (close > W1 peak)
+//  -1 = waiting for confirm SELL (close < W1 trough)
 
 var int   pendingState   = 0
 var float pendBreakPoint = na   // SH (sh0) or SL (sl0) = Entry level
 var float pendW1Peak     = na   // W1 peak (BUY) or W1 trough (SELL) = first impulse wave extreme
-var float pendW1Trough   = na   // Đáy W1 (BUY) or Đỉnh W1 (SELL) — dùng để terminate lines
+var float pendW1Trough   = na   // W1 trough (BUY) or W1 peak (SELL) — used for line termination
 var float pendSL         = na   // Stop Loss level
 var int   pendSL_idx     = na
 var int   pendBreak_idx  = na
@@ -213,7 +208,9 @@ var int   activeSignalDir  = 0    // 1 = BUY, -1 = SELL
 // -- Pending state lines --
 var line  pendEntryLine    = na   // Dashed line at pending Entry level
 var line  pendW1Line       = na   // Dashed line at W1 Peak/Trough level
-var label pendPhaseLabel   = na   // "Phase 1" / "Phase 2" label
+var line  pendSLLine       = na   // Dashed line at SL level
+var line  pendTPLine       = na   // Dashed line at TP level
+var label pendPhaseLabel   = na   // "Pending BUY" / "Pending SELL" label
 
 // -- Risk/Reward boxes --
 var box   activeRiskBox    = na   // Entry → SL (red zone)
@@ -232,6 +229,10 @@ f_clearPending() =>
         line.delete(pendEntryLine)
     if not na(pendW1Line)
         line.delete(pendW1Line)
+    if not na(pendSLLine)
+        line.delete(pendSLLine)
+    if not na(pendTPLine)
+        line.delete(pendTPLine)
     if not na(pendPhaseLabel)
         label.delete(pendPhaseLabel)
 
@@ -242,7 +243,7 @@ f_clearBoxes() =>
         box.delete(activeRewardBox)
 
 // -- Post-signal Entry touch → terminate lines --
-// Nến bất kỳ sau tín hiệu chạm Entry → kết thúc đường
+// Any candle after signal that touches Entry → terminate lines
 if not na(activeEntryLine) and not na(activeEntryPrice) and activeSignalDir != 0
     bool _touchEntry = (activeSignalDir == 1 and low <= activeEntryPrice) or (activeSignalDir == -1 and high >= activeEntryPrice)
     if _touchEntry
@@ -254,24 +255,20 @@ if not na(activeEntryLine) and not na(activeEntryPrice) and activeSignalDir != 0
         activeTPPrice    := na
         activeSignalDir  := 0
 
-// -- Phase 2: Retest at Entry (sh0 for BUY, sl0 for SELL) --
-if pendingState == 2 and not na(pendBreakPoint)
-    // SL invalidation
+// -- Wait for Confirm: CLOSE > W1 peak (BUY) or CLOSE < W1 trough (SELL) --
+if pendingState == 1
+    // BUY: wait for close > W1 peak
+    // Track W1 trough (lowest low from break to confirm)
+    if na(pendW1Trough) or low < pendW1Trough
+        pendW1Trough := low
     if not na(pendSL) and low <= pendSL
+        // SL hit → cancel
         pendingState := 0
-        f_terminateLines()
-        f_clearPending()
-        activeEntryLine  := na
-        activeSLLine     := na
-        activeTPLine     := na
-        activeEntryPrice := na
-        activeTPPrice    := na
-        activeSignalDir  := 0
-        pendEntryLine    := na
-        pendW1Line       := na
-        pendPhaseLabel   := na
-    else if low <= pendBreakPoint
-        // Retest Entry → BUY signal!
+    else if not na(pendBreakPoint) and low <= pendBreakPoint
+        // W1 wave base returns to SH → structure broken → cancel
+        pendingState := 0
+    else if not na(pendW1Peak) and close > pendW1Peak
+        // Close beyond W1 peak → Confirmed BUY!
         confirmedBuy  := true
         confEntry     := pendBreakPoint
         confSL        := pendSL
@@ -279,42 +276,24 @@ if pendingState == 2 and not na(pendBreakPoint)
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
         confW1Peak    := pendW1Peak
-        confWaveBar   := waveConfBar
-        confWaveHigh  := waveConfHigh
-        confWaveLow   := waveConfLow
+        confWaveBar   := bar_index
+        confWaveHigh  := high
+        confWaveLow   := low
         pendingState  := 0
-    // W1 trough invalidation — low chạm dưới chân sóng W1 → kết thúc
-    else if not na(pendW1Trough) and low <= pendW1Trough
-        pendingState := 0
-        f_terminateLines()
-        f_clearPending()
-        activeEntryLine  := na
-        activeSLLine     := na
-        activeTPLine     := na
-        activeEntryPrice := na
-        activeTPPrice    := na
-        activeSignalDir  := 0
-        pendEntryLine    := na
-        pendW1Line       := na
-        pendPhaseLabel   := na
 
-if pendingState == -2 and not na(pendBreakPoint)
-    // SL invalidation
+if pendingState == -1
+    // SELL: wait for close < W1 trough
+    // Track W1 peak (highest high from break to confirm)
+    if na(pendW1Trough) or high > pendW1Trough
+        pendW1Trough := high
     if not na(pendSL) and high >= pendSL
+        // SL hit → cancel
         pendingState := 0
-        f_terminateLines()
-        f_clearPending()
-        activeEntryLine  := na
-        activeSLLine     := na
-        activeTPLine     := na
-        activeEntryPrice := na
-        activeTPPrice    := na
-        activeSignalDir  := 0
-        pendEntryLine    := na
-        pendW1Line       := na
-        pendPhaseLabel   := na
-    else if high >= pendBreakPoint
-        // Retest Entry → SELL signal!
+    else if not na(pendBreakPoint) and high >= pendBreakPoint
+        // W1 wave base returns to SL (Entry) → structure broken → cancel
+        pendingState := 0
+    else if not na(pendW1Peak) and close < pendW1Peak
+        // Close beyond W1 trough → Confirmed SELL!
         confirmedSell := true
         confEntry     := pendBreakPoint
         confSL        := pendSL
@@ -322,66 +301,15 @@ if pendingState == -2 and not na(pendBreakPoint)
         confBreak_idx := pendBreak_idx
         confBreakPt   := pendBreakPoint
         confW1Peak    := pendW1Peak
-        confWaveBar   := waveConfBar
-        confWaveHigh  := waveConfHigh
-        confWaveLow   := waveConfLow
+        confWaveBar   := bar_index
+        confWaveHigh  := high
+        confWaveLow   := low
         pendingState  := 0
-    // W1 peak invalidation — high chạm trên đỉnh W1 (SELL) → kết thúc
-    else if not na(pendW1Trough) and high >= pendW1Trough
-        pendingState := 0
-        f_terminateLines()
-        f_clearPending()
-        activeEntryLine  := na
-        activeSLLine     := na
-        activeTPLine     := na
-        activeEntryPrice := na
-        activeTPPrice    := na
-        activeSignalDir  := 0
-        pendEntryLine    := na
-        pendW1Line       := na
-        pendPhaseLabel   := na
-
-// -- Phase 1: Wait for CLOSE > W1 peak (BUY) or CLOSE < W1 trough (SELL) --
-if pendingState == 1
-    // BUY: chờ close > W1 peak (sh1)
-    // Track đáy W1 (lowest low từ break đến confirm)
-    if na(pendW1Trough) or low < pendW1Trough
-        pendW1Trough := low
-    if not na(pendSL) and low <= pendSL
-        // SL hit → cancel
-        pendingState := 0
-    else if not na(pendBreakPoint) and low <= pendBreakPoint
-        // Chân sóng W1 về lại SH → phá cấu trúc → cancel
-        pendingState := 0
-    else if not na(pendW1Peak) and close > pendW1Peak
-        // Close vượt W1 peak → Confirm! → move to retest phase
-        pendingState := 2
-        waveConfBar  := bar_index
-        waveConfHigh := high
-        waveConfLow  := low
-
-if pendingState == -1
-    // SELL: chờ close < W1 trough (sl1)
-    // Track đỉnh W1 (highest high từ break đến confirm)
-    if na(pendW1Trough) or high > pendW1Trough
-        pendW1Trough := high
-    if not na(pendSL) and high >= pendSL
-        // SL hit → cancel
-        pendingState := 0
-    else if not na(pendBreakPoint) and high >= pendBreakPoint
-        // Chân sóng W1 về lại SL (Entry) → phá cấu trúc → cancel
-        pendingState := 0
-    else if not na(pendW1Peak) and close < pendW1Peak
-        // Close vượt W1 trough → Confirm! → move to retest phase
-        pendingState := -2
-        waveConfBar  := bar_index
-        waveConfHigh := high
-        waveConfLow  := low
 
 // -- New raw break → start tracking --
-// SH = sh0 (đỉnh cũ = Entry)
+// SH = sh0 (old high = Entry)
 // W1 peak = highest high from break candle until first bearish candle
-if rawBreakUp and pendingState != 2
+if rawBreakUp
     // Terminate old signal's lines when new tracking starts
     f_terminateLines()
     f_clearPending()
@@ -394,6 +322,8 @@ if rawBreakUp and pendingState != 2
     activeSignalDir  := 0
     pendEntryLine    := na
     pendW1Line       := na
+    pendSLLine       := na
+    pendTPLine       := na
     pendPhaseLabel   := na
     activeRiskBox    := na
     activeRewardBox  := na
@@ -436,14 +366,13 @@ if rawBreakUp and pendingState != 2
         pendSL_idx     := slBeforeSH_idx
         pendBreak_idx  := sh0_idx   // Entry line starts from sh0
         // Retroactive scan: from W1 bar + 1 to current bar
-        // Supports Phase 1→2 continuation (confirm then retest in same scan)
         int _retroFrom = math.max(_w1Lookback - 1, 0)  // w1_bar + 1 as lookback
         for i = _retroFrom to 0
             float rHigh  = high[i]
             float rLow   = low[i]
             float rClose = close[i]
             if pendingState == 1
-                // Phase 1: wait for confirm
+                // Wait for confirm
                 if na(pendW1Trough) or rLow < pendW1Trough
                     pendW1Trough := rLow
                 if not na(pendSL) and rLow <= pendSL
@@ -453,18 +382,7 @@ if rawBreakUp and pendingState != 2
                     pendingState := 0
                     break
                 if rClose > pendW1Peak
-                    pendingState := 2
-                    waveConfBar  := bar_index - i
-                    waveConfHigh := rHigh
-                    waveConfLow  := rLow
-                    continue  // Don't break! Continue to Phase 2 check
-            if pendingState == 2
-                // Phase 2: wait for retest entry
-                if not na(pendSL) and rLow <= pendSL
-                    pendingState := 0
-                    break
-                if rLow <= pendBreakPoint
-                    // Retest Entry → BUY signal (within retro scan)
+                    // Confirmed BUY (within retro scan)
                     confirmedBuy  := true
                     confEntry     := pendBreakPoint
                     confSL        := pendSL
@@ -472,19 +390,16 @@ if rawBreakUp and pendingState != 2
                     confBreak_idx := pendBreak_idx
                     confBreakPt   := pendBreakPoint
                     confW1Peak    := pendW1Peak
-                    confWaveBar   := waveConfBar
-                    confWaveHigh  := waveConfHigh
-                    confWaveLow   := waveConfLow
+                    confWaveBar   := bar_index - i
+                    confWaveHigh  := rHigh
+                    confWaveLow   := rLow
                     pendingState  := 0
-                    break
-                if not na(pendW1Trough) and rLow <= pendW1Trough
-                    pendingState := 0
                     break
             if pendingState == 0
                 break
 
-// SL (đáy cũ = Entry), W1 trough = first impulse wave low
-if rawBreakDown and pendingState != -2
+// SL (old low = Entry), W1 trough = first impulse wave low
+if rawBreakDown
     // Terminate old signal's lines when new tracking starts
     f_terminateLines()
     f_clearPending()
@@ -497,6 +412,8 @@ if rawBreakDown and pendingState != -2
     activeSignalDir  := 0
     pendEntryLine    := na
     pendW1Line       := na
+    pendSLLine       := na
+    pendTPLine       := na
     pendPhaseLabel   := na
     activeRiskBox    := na
     activeRewardBox  := na
@@ -533,7 +450,7 @@ if rawBreakDown and pendingState != -2
     if not na(_w1Trough)
         pendingState   := -1
         pendBreakPoint := sl0       // SL = Entry level
-        pendW1Peak     := _w1Trough // W1 trough = mốc cần vượt (xuống)
+        pendW1Peak     := _w1Trough // W1 trough = level to break below (sell)
         pendW1Trough   := _w1TroughInitSell  // Init with highest high during W1 impulse
         pendSL         := shBeforeSL
         pendSL_idx     := shBeforeSL_idx
@@ -545,7 +462,7 @@ if rawBreakDown and pendingState != -2
             float rLow   = low[i]
             float rClose = close[i]
             if pendingState == -1
-                // Phase 1: wait for confirm SELL
+                // Wait for confirm SELL
                 if na(pendW1Trough) or rHigh > pendW1Trough
                     pendW1Trough := rHigh
                 if not na(pendSL) and rHigh >= pendSL
@@ -555,18 +472,7 @@ if rawBreakDown and pendingState != -2
                     pendingState := 0
                     break
                 if rClose < pendW1Peak
-                    pendingState := -2
-                    waveConfBar  := bar_index - i
-                    waveConfHigh := rHigh
-                    waveConfLow  := rLow
-                    continue  // Don't break! Continue to Phase 2 check
-            if pendingState == -2
-                // Phase 2: wait for retest entry SELL
-                if not na(pendSL) and rHigh >= pendSL
-                    pendingState := 0
-                    break
-                if rHigh >= pendBreakPoint
-                    // Retest Entry → SELL signal (within retro scan)
+                    // Confirmed SELL (within retro scan)
                     confirmedSell := true
                     confEntry     := pendBreakPoint
                     confSL        := pendSL
@@ -574,13 +480,10 @@ if rawBreakDown and pendingState != -2
                     confBreak_idx := pendBreak_idx
                     confBreakPt   := pendBreakPoint
                     confW1Peak    := pendW1Peak
-                    confWaveBar   := waveConfBar
-                    confWaveHigh  := waveConfHigh
-                    confWaveLow   := waveConfLow
+                    confWaveBar   := bar_index - i
+                    confWaveHigh  := rHigh
+                    confWaveLow   := rLow
                     pendingState  := 0
-                    break
-                if not na(pendW1Trough) and rHigh >= pendW1Trough
-                    pendingState := 0
                     break
             if pendingState == 0
                 break
@@ -598,7 +501,7 @@ plotshape(showSwings and not na(swingLow), title = "Swing Low",
      style = shape.triangleup, location = location.belowbar,
      color = colSwingLow, offset = -pivotLen, size = size.tiny)
 
-// -- Confirmed BUY Retest --
+// -- Confirmed BUY --
 if confirmedBuy
     // TP = high of Confirm Break candle
     float _tp = confWaveHigh
@@ -612,6 +515,8 @@ if confirmedBuy
         f_clearBoxes()
         pendEntryLine  := na
         pendW1Line     := na
+        pendSLLine     := na
+        pendTPLine     := na
         pendPhaseLabel := na
 
         activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
@@ -663,7 +568,7 @@ if confirmedBuy
              style = label.style_label_down, color = colBreakUp,
              textcolor = color.white, size = size.tiny)
 
-// -- Confirmed SELL Retest --
+// -- Confirmed SELL --
 if confirmedSell
     // TP = low of Confirm Break candle
     float _tp = confWaveLow
@@ -677,6 +582,8 @@ if confirmedSell
         f_clearBoxes()
         pendEntryLine  := na
         pendW1Line     := na
+        pendSLLine     := na
+        pendTPLine     := na
         pendPhaseLabel := na
 
         activeEntryLine := line.new(confBreak_idx, confEntry, bar_index, confEntry,
@@ -740,7 +647,6 @@ if not na(activeTPLine)
 if showPending and pendingState != 0
     f_clearPending()
     bool _isBuy = pendingState > 0
-    string _phaseText = math.abs(pendingState) == 1 ? "Phase 1" : "Phase 2"
     color _pendColor = _isBuy ? color.new(colEntryBuy, 50) : color.new(colEntrySell, 50)
     color _w1Color   = color.new(colTP, 50)
 
@@ -757,9 +663,15 @@ if showPending and pendingState != 0
              xloc = xloc.bar_index, color = _w1Color,
              style = line.style_dotted, width = 1)
 
-    // Phase label
+    // SL line (dotted)
+    if not na(pendSL) and not na(pendSL_idx)
+        pendSLLine := line.new(pendSL_idx, pendSL, bar_index, pendSL,
+             xloc = xloc.bar_index, color = color.new(colSL, 50),
+             style = line.style_dotted, width = 1)
+
+    // Pending label
     pendPhaseLabel := label.new(bar_index, pendBreakPoint,
-         _phaseText + (_isBuy ? " BUY" : " SELL"),
+         "Pending" + (_isBuy ? " BUY" : " SELL"),
          xloc = xloc.bar_index, yloc = yloc.price,
          style = _isBuy ? label.style_label_up : label.style_label_down,
          color = color.new(_pendColor, 30),
@@ -768,6 +680,8 @@ else if showPending and pendingState == 0
     f_clearPending()
     pendEntryLine  := na
     pendW1Line     := na
+    pendSLLine     := na
+    pendTPLine     := na
     pendPhaseLabel := na
 
 // ============================================================================
