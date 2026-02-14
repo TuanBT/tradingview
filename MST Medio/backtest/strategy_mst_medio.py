@@ -66,7 +66,7 @@ def run_mst_medio(
     break_mult: float = 0.25,
     impulse_mult: float = 1.5,
     min_rr: float = 0.0,           # Minimum R:R to accept signal (0=no filter)
-    sl_buffer_pct: float = 0.0,
+    sl_buffer_pct: float = 0.05,
     tp_mode: str = "confirm",      # "confirm" = confirm candle H/L, "fixed_rr" = fixed ratio
     fixed_rr: float = 2.0,         # Only used if tp_mode="fixed_rr"
     debug: bool = False,
@@ -401,7 +401,8 @@ def run_mst_medio(
         # ── Process confirmed signals ──
         if confirmed_buy and pend_break_point is not None and pend_sl is not None:
             entry = pend_break_point
-            sl_val = pend_sl - entry * sl_buffer_pct if sl_buffer_pct > 0 else pend_sl
+            raw_risk = abs(entry - pend_sl)
+            sl_val = pend_sl - raw_risk * sl_buffer_pct if sl_buffer_pct > 0 else pend_sl
             risk = abs(entry - sl_val)
 
             if tp_mode == "confirm":
@@ -431,7 +432,8 @@ def run_mst_medio(
 
         if confirmed_sell and pend_break_point is not None and pend_sl is not None:
             entry = pend_break_point
-            sl_val = pend_sl + entry * sl_buffer_pct if sl_buffer_pct > 0 else pend_sl
+            raw_risk = abs(pend_sl - entry)
+            sl_val = pend_sl + raw_risk * sl_buffer_pct if sl_buffer_pct > 0 else pend_sl
             risk = abs(sl_val - entry)
 
             if tp_mode == "confirm":

@@ -66,7 +66,6 @@ def run_pair_backtest(symbol: str, df: pd.DataFrame) -> dict:
         break_mult=0.25,
         impulse_mult=1.5,
         min_rr=0,
-        sl_buffer_pct=0,
         tp_mode="confirm",
         debug=False,
     )
