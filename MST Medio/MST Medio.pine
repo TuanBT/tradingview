@@ -1,11 +1,14 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
-// Indicator : MST Medio
+// Indicator : MST Medio (Make Simple Trading by Medio)
 // Version   : v2.0
-// Author    : Tuan
-// Purpose   : Detect HH/LL breakouts → wait for CLOSE beyond W1 peak (confirm)
-//             → then wait for RETEST at SH/SL (Entry = old high/low).
-//             3-Phase Confirmation: Break → Confirm → Retest → Signal
+// Author    : Medio
+// Purpose   : 2-Step Breakout Confirmation System
+//             1. Detect HH/LL breakout (with impulse body filter)
+//             2. Find W1 Peak (first impulse wave extreme after break)
+//             3. Wait for CLOSE beyond W1 Peak → Confirmed! → Signal
+//             4. Entry = old SH/SL, SL = swing opposite
+//             5. TP = Confirm Break candle H/L (W1 Peak area)
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
