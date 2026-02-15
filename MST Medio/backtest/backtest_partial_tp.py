@@ -181,6 +181,8 @@ def print_results(trades: List[PartialTrade], label: str):
 
     # Partial TP: average of both parts (each is 50%)
     partial_pnl = sum((t.part1_pnl_r + t.part2_pnl_r) / 2 for t in trades)
+    partial_wins = sum(1 for t in trades if (t.part1_pnl_r + t.part2_pnl_r) > 0)
+    partial_wr = partial_wins / n * 100
 
     # Part2 stats
     p2_tp_opp = sum(1 for t in trades if t.part2_result == "OPP")
@@ -193,7 +195,7 @@ def print_results(trades: List[PartialTrade], label: str):
     print(f"  {label} — {n} trades")
     print(f"{'─' * 60}")
     print(f"  Full TP:    WR={full_wr:.1f}% | PnL={full_pnl:+.2f}R | Avg={full_pnl/n:+.2f}R")
-    print(f"  Partial TP: PnL={partial_pnl:+.2f}R | Avg={partial_pnl/n:+.2f}R")
+    print(f"  Partial TP: WR={partial_wr:.1f}% | PnL={partial_pnl:+.2f}R | Avg={partial_pnl/n:+.2f}R")
     print(f"  Part2 exits: OPP={p2_tp_opp} BE={p2_be} SL={p2_sl} OPEN={p2_open} | Avg Part2={p2_pnl_avg:+.2f}R")
     diff = partial_pnl - full_pnl
     print(f"  Diff: {diff:+.2f}R {'✅ PARTIAL BETTER' if diff > 0 else '❌ FULL BETTER'}")
@@ -261,24 +263,29 @@ def main():
 
         n = len(trades)
         full_pnl = sum(t.signal.pnl_r for t in trades)
+        full_wins = sum(1 for t in trades if t.signal.result == "TP")
         partial_pnl = sum((t.part1_pnl_r + t.part2_pnl_r) / 2 for t in trades)
-        results.append((symbol, n, full_pnl, partial_pnl))
+        partial_wins = sum(1 for t in trades if (t.part1_pnl_r + t.part2_pnl_r) > 0)
+        results.append((symbol, n, full_pnl, full_wins, partial_pnl, partial_wins))
 
     # Summary
     print(f"\n\n{'=' * 60}")
     print("SUMMARY")
     print(f"{'=' * 60}")
-    print(f"{'Symbol':<15} {'N':>4} {'Full TP(R)':>11} {'Partial(R)':>11} {'Diff':>10}")
-    print("-" * 55)
-    tf = tp = 0
-    for sym, n, fp, pp in results:
+    print(f"{'Symbol':<15} {'N':>4} {'Full WR%':>8} {'Full(R)':>8} {'Part WR%':>8} {'Part(R)':>8} {'Diff':>8}")
+    print("-" * 65)
+    tf = tp = tw_f = tw_p = tn = 0
+    for sym, n, fp, fw, pp, pw in results:
         diff = pp - fp
-        print(f"{sym:<15} {n:>4} {fp:>+10.2f} {pp:>+10.2f} {diff:>+9.2f}")
-        tf += fp
-        tp += pp
-    print("-" * 55)
+        fwr = fw / n * 100 if n > 0 else 0
+        pwr = pw / n * 100 if n > 0 else 0
+        print(f"{sym:<15} {n:>4} {fwr:>7.1f}% {fp:>+7.2f} {pwr:>7.1f}% {pp:>+7.2f} {diff:>+7.2f}")
+        tf += fp; tp += pp; tw_f += fw; tw_p += pw; tn += n
+    print("-" * 65)
     td = tp - tf
-    print(f"{'TOTAL':<15} {'':>4} {tf:>+10.2f} {tp:>+10.2f} {td:>+9.2f} {'✅' if td > 0 else '❌'}")
+    tfwr = tw_f / tn * 100 if tn > 0 else 0
+    tpwr = tw_p / tn * 100 if tn > 0 else 0
+    print(f"{'TOTAL':<15} {tn:>4} {tfwr:>7.1f}% {tf:>+7.2f} {tpwr:>7.1f}% {tp:>+7.2f} {td:>+7.2f} {'✅' if td > 0 else '❌'}")
 
 
 if __name__ == "__main__":
