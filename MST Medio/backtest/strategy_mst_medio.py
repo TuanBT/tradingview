@@ -29,8 +29,9 @@ class Signal:
     w1_peak: float          # W1 impulse wave peak
     break_time: pd.Timestamp
     confirm_time: pd.Timestamp
-    result: str = ""        # "TP", "SL", "CLOSE_REVERSE", "OPEN"
+    result: str = ""        # "TP", "SL", "CLOSE_REVERSE", "OPEN", "PENDING", "UNFILLED"
     pnl_r: float = 0.0
+    filled: bool = False    # Whether limit order was filled
 
 
 @dataclass
@@ -46,15 +47,29 @@ def find_swings(df: pd.DataFrame, pivot_len: int = 5) -> List[SwingPoint]:
     highs = df["High"].values
     lows = df["Low"].values
     times = df.index
+    n = len(df)
 
-    for i in range(pivot_len, len(df) - pivot_len):
-        is_ph = all(highs[i] >= highs[j] for j in range(i - pivot_len, i + pivot_len + 1) if j != i)
+    for i in range(pivot_len, n - pivot_len):
+        is_ph = True
+        is_pl = True
+        hi = highs[i]
+        lo = lows[i]
+        for j in range(i - pivot_len, i + pivot_len + 1):
+            if j == i:
+                continue
+            if highs[j] > hi:
+                is_ph = False
+                if not is_pl:
+                    break
+            if lows[j] < lo:
+                is_pl = False
+                if not is_ph:
+                    break
+
         if is_ph:
-            swings.append(SwingPoint(time=times[i], price=highs[i], type="HIGH", bar_index=i))
-
-        is_pl = all(lows[i] <= lows[j] for j in range(i - pivot_len, i + pivot_len + 1) if j != i)
+            swings.append(SwingPoint(time=times[i], price=hi, type="HIGH", bar_index=i))
         if is_pl:
-            swings.append(SwingPoint(time=times[i], price=lows[i], type="LOW", bar_index=i))
+            swings.append(SwingPoint(time=times[i], price=lo, type="LOW", bar_index=i))
 
     swings.sort(key=lambda s: s.time)
     return swings
@@ -69,6 +84,7 @@ def run_mst_medio(
     sl_buffer_pct: float = 0.05,
     tp_mode: str = "confirm",      # "confirm" = confirm candle H/L, "fixed_rr" = fixed ratio
     fixed_rr: float = 2.0,         # Only used if tp_mode="fixed_rr"
+    limit_order: bool = True,      # True = realistic limit order (wait for fill), False = instant entry (legacy)
     debug: bool = False,
 ) -> tuple[List[Signal], List[SwingPoint]]:
     """
@@ -93,6 +109,19 @@ def run_mst_medio(
     sl_before_sh_idx = None
     sh_before_sl = None
     sh_before_sl_idx = None
+
+    # Pre-compute rolling average body (20-bar window) — avoids O(n²) in hot loop
+    all_bodies = np.abs(closes - opens)
+    # cumulative sum for rolling mean
+    cum_bodies = np.cumsum(all_bodies)
+    avg_body_arr = np.empty(len(df))
+    for i in range(len(df)):
+        start = max(0, i - 19)
+        count = i - start + 1
+        if start == 0:
+            avg_body_arr[i] = cum_bodies[i] / count
+        else:
+            avg_body_arr[i] = (cum_bodies[i] - cum_bodies[start - 1]) / count
 
     # Pending state: 0=idle, 1=waiting confirm BUY, -1=waiting confirm SELL
     pending_state = 0
@@ -157,8 +186,7 @@ def run_mst_medio(
 
         # Impulse Body Filter
         if impulse_mult > 0:
-            bodies = np.abs(closes[:bar_i+1] - opens[:bar_i+1])
-            avg_body = np.mean(bodies[max(0, bar_i-19):bar_i+1]) if bar_i >= 1 else 1.0
+            avg_body = avg_body_arr[bar_i]
 
             if is_new_hh and sh0_idx is not None:
                 found = False
@@ -418,14 +446,19 @@ def run_mst_medio(
                 if debug:
                     print(f"  ⚠️ Skipped BUY: R:R={rr:.2f} < min={min_rr:.1f}")
             else:
-                if active_signal is not None and active_signal.result == "OPEN":
-                    active_signal.result = "CLOSE_REVERSE"
-                    active_signal.pnl_r = _calc_pnl_r(active_signal, bar_close)
+                if active_signal is not None and active_signal.result in ("OPEN", "PENDING"):
+                    if active_signal.result == "PENDING":
+                        active_signal.result = "UNFILLED"
+                        active_signal.pnl_r = 0.0
+                    else:
+                        active_signal.result = "CLOSE_REVERSE"
+                        active_signal.pnl_r = _calc_pnl_r(active_signal, bar_close)
 
+                init_state = "PENDING" if limit_order else "OPEN"
                 sig = Signal(
                     time=bar_time, direction="BUY", entry=entry, sl=sl_val, tp=tp,
                     w1_peak=pend_w1_peak, break_time=times[pend_break_idx] if pend_break_idx else bar_time,
-                    confirm_time=bar_time, result="OPEN",
+                    confirm_time=bar_time, result=init_state, filled=not limit_order,
                 )
                 signals.append(sig)
                 active_signal = sig
@@ -449,40 +482,88 @@ def run_mst_medio(
                 if debug:
                     print(f"  ⚠️ Skipped SELL: R:R={rr:.2f} < min={min_rr:.1f}")
             else:
-                if active_signal is not None and active_signal.result == "OPEN":
-                    active_signal.result = "CLOSE_REVERSE"
-                    active_signal.pnl_r = _calc_pnl_r(active_signal, bar_close)
+                if active_signal is not None and active_signal.result in ("OPEN", "PENDING"):
+                    if active_signal.result == "PENDING":
+                        active_signal.result = "UNFILLED"
+                        active_signal.pnl_r = 0.0
+                    else:
+                        active_signal.result = "CLOSE_REVERSE"
+                        active_signal.pnl_r = _calc_pnl_r(active_signal, bar_close)
 
+                init_state = "PENDING" if limit_order else "OPEN"
                 sig = Signal(
                     time=bar_time, direction="SELL", entry=entry, sl=sl_val, tp=tp,
                     w1_peak=pend_w1_peak, break_time=times[pend_break_idx] if pend_break_idx else bar_time,
-                    confirm_time=bar_time, result="OPEN",
+                    confirm_time=bar_time, result=init_state, filled=not limit_order,
                 )
                 signals.append(sig)
                 active_signal = sig
 
-        # ── Check TP/SL hit for active signal ──
-        if active_signal is not None and active_signal.result == "OPEN":
-            if active_signal.direction == "BUY":
-                if bar_low <= active_signal.sl:
-                    active_signal.result = "SL"
-                    active_signal.pnl_r = -1.0
-                    active_signal = None
-                elif active_signal.tp > 0 and bar_high >= active_signal.tp:
-                    rr_actual = abs(active_signal.tp - active_signal.entry) / abs(active_signal.entry - active_signal.sl)
-                    active_signal.result = "TP"
-                    active_signal.pnl_r = rr_actual
-                    active_signal = None
-            else:
-                if bar_high >= active_signal.sl:
-                    active_signal.result = "SL"
-                    active_signal.pnl_r = -1.0
-                    active_signal = None
-                elif active_signal.tp > 0 and bar_low <= active_signal.tp:
-                    rr_actual = abs(active_signal.entry - active_signal.tp) / abs(active_signal.sl - active_signal.entry)
-                    active_signal.result = "TP"
-                    active_signal.pnl_r = rr_actual
-                    active_signal = None
+        # ── Check limit order fill + TP/SL hit for active signal ──
+        if active_signal is not None and active_signal.result in ("PENDING", "OPEN"):
+            # --- PENDING: Wait for limit order fill ---
+            if active_signal.result == "PENDING":
+                if active_signal.direction == "BUY":
+                    # BUY LIMIT fills when price drops to entry
+                    if bar_low <= active_signal.entry:
+                        active_signal.result = "OPEN"
+                        active_signal.filled = True
+                        if debug:
+                            print(f"  [{bar_time}] ✓ BUY LIMIT filled at {active_signal.entry:.2f} (low={bar_low:.2f})")
+                        # Check if SL also hit on same bar (SL takes priority)
+                        if bar_low <= active_signal.sl:
+                            active_signal.result = "SL"
+                            active_signal.pnl_r = -1.0
+                            active_signal = None
+                    # Check if SL hit before fill (cancel order)
+                    elif bar_low <= active_signal.sl:
+                        active_signal.result = "SL"
+                        active_signal.pnl_r = -1.0
+                        active_signal = None
+                        if debug:
+                            print(f"  [{bar_time}] ✗ BUY LIMIT: SL hit before fill")
+                else:
+                    # SELL LIMIT fills when price rises to entry
+                    if bar_high >= active_signal.entry:
+                        active_signal.result = "OPEN"
+                        active_signal.filled = True
+                        if debug:
+                            print(f"  [{bar_time}] ✓ SELL LIMIT filled at {active_signal.entry:.2f} (high={bar_high:.2f})")
+                        # Check if SL also hit on same bar
+                        if bar_high >= active_signal.sl:
+                            active_signal.result = "SL"
+                            active_signal.pnl_r = -1.0
+                            active_signal = None
+                    # Check if SL hit before fill (cancel order)
+                    elif bar_high >= active_signal.sl:
+                        active_signal.result = "SL"
+                        active_signal.pnl_r = -1.0
+                        active_signal = None
+                        if debug:
+                            print(f"  [{bar_time}] ✗ SELL LIMIT: SL hit before fill")
+
+            # --- OPEN (filled): Check TP/SL ---
+            if active_signal is not None and active_signal.result == "OPEN":
+                if active_signal.direction == "BUY":
+                    if bar_low <= active_signal.sl:
+                        active_signal.result = "SL"
+                        active_signal.pnl_r = -1.0
+                        active_signal = None
+                    elif active_signal.tp > 0 and bar_high >= active_signal.tp:
+                        rr_actual = abs(active_signal.tp - active_signal.entry) / abs(active_signal.entry - active_signal.sl)
+                        active_signal.result = "TP"
+                        active_signal.pnl_r = rr_actual
+                        active_signal = None
+                else:
+                    if bar_high >= active_signal.sl:
+                        active_signal.result = "SL"
+                        active_signal.pnl_r = -1.0
+                        active_signal = None
+                    elif active_signal.tp > 0 and bar_low <= active_signal.tp:
+                        rr_actual = abs(active_signal.entry - active_signal.tp) / abs(active_signal.sl - active_signal.entry)
+                        active_signal.result = "TP"
+                        active_signal.pnl_r = rr_actual
+                        active_signal = None
 
     return signals, swings
 
@@ -527,10 +608,14 @@ def print_summary(signals: List[Signal], title: str = "MST Medio v2.0"):
 
     df = signals_to_dataframe(signals)
     closed = df[df["Result"].isin(["TP", "SL", "CLOSE_REVERSE"])]
+    unfilled = df[df["Result"] == "UNFILLED"]
+    pending = df[df["Result"] == "PENDING"]
     total = len(closed)
 
     if total == 0:
         print(f"Signals: {len(signals)} | None closed yet.")
+        if len(unfilled) > 0:
+            print(f"  Unfilled limit orders: {len(unfilled)}")
         return
 
     wins = len(closed[closed["PnL(R)"] > 0])
@@ -544,7 +629,12 @@ def print_summary(signals: List[Signal], title: str = "MST Medio v2.0"):
     print(f"\n{'='*60}")
     print(f"  {title}")
     print(f"{'='*60}")
-    print(f"  Signals: {len(signals)} | Closed: {total}")
+    print(f"  Signals: {len(signals)} | Closed: {total}", end="")
+    if len(unfilled) > 0:
+        print(f" | Unfilled: {len(unfilled)}", end="")
+    if len(pending) > 0:
+        print(f" | Still pending: {len(pending)}", end="")
+    print()
     print(f"  TP: {tp_hits} | SL: {sl_hits} | Reversed: {rev}")
     print(f"  Win Rate: {wr:.1f}% ({wins}/{total})")
     print(f"  Total PnL: {total_r:+.2f} R")

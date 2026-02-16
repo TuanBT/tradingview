@@ -30,7 +30,7 @@ pivotLen   = input.int(5,   "Pivot Lookback", minval = 2, maxval = 50, group = G
              tooltip = "Number of bars left and right to confirm a Swing High/Low pivot point.")
 breakMult  = input.float(0.25, "Break Strength", minval = 0, step = 0.25, group = GRP_SIGNAL,
              tooltip = "Break distance must be ≥ breakMult × previous swing range. Set 0 to disable this filter.")
-impulseMult = input.float(1.5, "Impulse Body Filter", minval = 0, step = 0.25, group = GRP_SIGNAL,
+impulseMult = input.float(1.0, "Impulse Body Filter", minval = 0, step = 0.25, group = GRP_SIGNAL,
              tooltip = "The first candle closing beyond the old high/low must have body ≥ impulseMult × 20-bar average body. Set 0 to disable.")
 
 // Visual
