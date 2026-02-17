@@ -32,6 +32,7 @@ class Signal:
     result: str = ""        # "TP", "SL", "CLOSE_REVERSE", "OPEN", "PENDING", "UNFILLED"
     pnl_r: float = 0.0
     filled: bool = False    # Whether limit order was filled
+    orig_sl: float = 0.0   # Original SL (before BE move) for risk calculation
 
 
 @dataclass
@@ -43,9 +44,18 @@ class SwingPoint:
 
 
 def find_swings(df: pd.DataFrame, pivot_len: int = 5) -> List[SwingPoint]:
+    """
+    Find swing highs and lows.
+    Matches MQL5 IsPivotHigh/Low behavior:
+    - MQL5 checks pivot at bar[pivotLen] when bar[0] opens
+    - bar[0] is incomplete (only open price available for High/Low)
+    - All other bars [1..2*pivotLen] are complete
+    - MQL5 uses >= for High rejection and <= for Low rejection (strict: no ties)
+    """
     swings = []
     highs = df["High"].values
     lows = df["Low"].values
+    opens = df["Open"].values
     times = df.index
     n = len(df)
 
@@ -57,11 +67,19 @@ def find_swings(df: pd.DataFrame, pivot_len: int = 5) -> List[SwingPoint]:
         for j in range(i - pivot_len, i + pivot_len + 1):
             if j == i:
                 continue
-            if highs[j] > hi:
+            # MQL5: bar 0 (= j == i + pivot_len) is incomplete at detection time
+            # At bar open, iHigh(0) = iLow(0) = Open price
+            if j == i + pivot_len:
+                j_high = opens[j]  # bar 0: only open price known
+                j_low = opens[j]
+            else:
+                j_high = highs[j]
+                j_low = lows[j]
+            if j_high >= hi:  # MQL5 uses >= (strict: no ties allowed)
                 is_ph = False
                 if not is_pl:
                     break
-            if lows[j] < lo:
+            if j_low <= lo:   # MQL5 uses <= (strict: no ties allowed)
                 is_pl = False
                 if not is_ph:
                     break
@@ -85,6 +103,7 @@ def run_mst_medio(
     tp_mode: str = "confirm",      # "confirm" = confirm candle H/L, "fixed_rr" = fixed ratio
     fixed_rr: float = 2.0,         # Only used if tp_mode="fixed_rr"
     limit_order: bool = True,      # True = realistic limit order (wait for fill), False = instant entry (legacy)
+    be_at_r: float = 0.0,          # Breakeven: move SL to entry when profit >= be_at_r × risk (0=disabled)
     debug: bool = False,
 ) -> tuple[List[Signal], List[SwingPoint]]:
     """
@@ -110,18 +129,21 @@ def run_mst_medio(
     sh_before_sl = None
     sh_before_sl_idx = None
 
-    # Pre-compute rolling average body (20-bar window) — avoids O(n²) in hot loop
+    # Pre-compute rolling average body (20-bar window, shifted by 1 to match MQL5)
+    # MQL5 CalcAvgBody(1, 20) = avg of bars 1..20 (excludes current bar 0)
+    # Python equivalent: avg of bars [i-20, i-1] (excludes bar i)
     all_bodies = np.abs(closes - opens)
-    # cumulative sum for rolling mean
     cum_bodies = np.cumsum(all_bodies)
     avg_body_arr = np.empty(len(df))
-    for i in range(len(df)):
-        start = max(0, i - 19)
-        count = i - start + 1
+    avg_body_arr[0] = 0.0  # No previous bars
+    for i in range(1, len(df)):
+        start = max(0, i - 20)  # 20 bars before current, exclusive of current
+        end = i - 1             # Last completed bar
+        count = end - start + 1
         if start == 0:
-            avg_body_arr[i] = cum_bodies[i] / count
+            avg_body_arr[i] = cum_bodies[end] / count
         else:
-            avg_body_arr[i] = (cum_bodies[i] - cum_bodies[start - 1]) / count
+            avg_body_arr[i] = (cum_bodies[end] - cum_bodies[start - 1]) / count
 
     # Pending state: 0=idle, 1=waiting confirm BUY, -1=waiting confirm SELL
     pending_state = 0
@@ -134,6 +156,8 @@ def run_mst_medio(
 
     # Active signal tracking
     active_signal: Optional[Signal] = None
+    be_done = False        # Whether breakeven has been moved for current trade
+    orig_sl = 0.0          # Original SL (for risk distance in BE calculation)
 
     swing_idx = 0
 
@@ -143,6 +167,17 @@ def run_mst_medio(
         bar_low = lows[bar_i]
         bar_close = closes[bar_i]
         bar_open = opens[bar_i]
+
+        # MQL5 model: OnTick() fires at bar 0 open, reads bar[1] for confirmation
+        # Python equivalent: at bar_i (= bar 0), read bar_i-1 (= bar[1]) for pending/confirm
+        # Signal time = bar_i time (= bar 0 open time in MQL5)
+        prev_i = bar_i - 1
+        if prev_i < 0:
+            continue
+        prev_high = highs[prev_i]
+        prev_low = lows[prev_i]
+        prev_close = closes[prev_i]
+        prev_open = opens[prev_i]
 
         # Confirmed bar (pivot_len bars ago)
         confirmed_bar = bar_i - pivot_len
@@ -237,49 +272,49 @@ def run_mst_medio(
         # Wait for Confirm BUY: close > W1 peak
         if pending_state == 1:
             # Track W1 trough
-            if pend_w1_trough is None or bar_low < pend_w1_trough:
-                pend_w1_trough = bar_low
+            if pend_w1_trough is None or prev_low < pend_w1_trough:
+                pend_w1_trough = prev_low
             # SL invalidation
-            if pend_sl is not None and bar_low <= pend_sl:
+            if pend_sl is not None and prev_low <= pend_sl:
                 if debug:
-                    print(f"  [{bar_time}] ✗ BUY cancelled: SL hit low={bar_low:.2f} <= SL={pend_sl:.2f}")
+                    print(f"  [{bar_time}] ✗ BUY cancelled: SL hit low={prev_low:.2f} <= SL={pend_sl:.2f}")
                 pending_state = 0
             # Structure broken: price returns to entry level
-            elif pend_break_point is not None and bar_low <= pend_break_point:
+            elif pend_break_point is not None and prev_low <= pend_break_point:
                 if debug:
-                    print(f"  [{bar_time}] ✗ BUY cancelled: returns to entry low={bar_low:.2f} <= entry={pend_break_point:.2f}")
+                    print(f"  [{bar_time}] ✗ BUY cancelled: returns to entry low={prev_low:.2f} <= entry={pend_break_point:.2f}")
                 pending_state = 0
             # Confirm: close > W1 peak
-            elif pend_w1_peak is not None and bar_close > pend_w1_peak:
+            elif pend_w1_peak is not None and prev_close > pend_w1_peak:
                 confirmed_buy = True
-                conf_wave_high = bar_high
-                conf_wave_low = bar_low
+                conf_wave_high = prev_high
+                conf_wave_low = prev_low
                 if debug:
-                    print(f"  [{bar_time}] ✓ CONFIRM BUY close={bar_close:.2f} > W1={pend_w1_peak:.2f}")
+                    print(f"  [{bar_time}] ✓ CONFIRM BUY close={prev_close:.2f} > W1={pend_w1_peak:.2f}")
                 pending_state = 0
 
         # Wait for Confirm SELL: close < W1 trough
         elif pending_state == -1:
             # Track W1 peak (highest high for SELL)
-            if pend_w1_trough is None or bar_high > pend_w1_trough:
-                pend_w1_trough = bar_high
+            if pend_w1_trough is None or prev_high > pend_w1_trough:
+                pend_w1_trough = prev_high
             # SL invalidation
-            if pend_sl is not None and bar_high >= pend_sl:
+            if pend_sl is not None and prev_high >= pend_sl:
                 if debug:
-                    print(f"  [{bar_time}] ✗ SELL cancelled: SL hit high={bar_high:.2f} >= SL={pend_sl:.2f}")
+                    print(f"  [{bar_time}] ✗ SELL cancelled: SL hit high={prev_high:.2f} >= SL={pend_sl:.2f}")
                 pending_state = 0
             # Structure broken: price returns to entry level
-            elif pend_break_point is not None and bar_high >= pend_break_point:
+            elif pend_break_point is not None and prev_high >= pend_break_point:
                 if debug:
-                    print(f"  [{bar_time}] ✗ SELL cancelled: returns to entry high={bar_high:.2f} >= entry={pend_break_point:.2f}")
+                    print(f"  [{bar_time}] ✗ SELL cancelled: returns to entry high={prev_high:.2f} >= entry={pend_break_point:.2f}")
                 pending_state = 0
             # Confirm: close < W1 trough
-            elif pend_w1_peak is not None and bar_close < pend_w1_peak:
+            elif pend_w1_peak is not None and prev_close < pend_w1_peak:
                 confirmed_sell = True
-                conf_wave_high = bar_high
-                conf_wave_low = bar_low
+                conf_wave_high = prev_high
+                conf_wave_low = prev_low
                 if debug:
-                    print(f"  [{bar_time}] ✓ CONFIRM SELL close={bar_close:.2f} < W1={pend_w1_peak:.2f}")
+                    print(f"  [{bar_time}] ✓ CONFIRM SELL close={prev_close:.2f} < W1={pend_w1_peak:.2f}")
                 pending_state = 0
 
         # ── New break → find W1 peak and start tracking ──
@@ -292,7 +327,7 @@ def run_mst_medio(
             found_break = False
             scan_from = sh0_idx if sh0_idx is not None else confirmed_bar
 
-            for j in range(scan_from, bar_i + 1):
+            for j in range(scan_from, bar_i):  # Exclude bar_i (MQL5: i >= 1, excludes bar 0)
                 cl = closes[j]
                 op = opens[j]
                 hi = highs[j]
@@ -322,18 +357,18 @@ def run_mst_medio(
                 if debug:
                     print(f"  → Pending BUY, entry={sh0:.2f}, W1={w1_peak:.2f}, SL={pend_sl}")
 
-                # Retroactive scan from W1 end to current bar
+                # Retroactive scan from W1 end to bar_i-1 (MQL5: retroFrom to bar 1)
                 # Find W1 end bar index
                 w1_end_j = scan_from
                 found_break2 = False
-                for j in range(scan_from, bar_i + 1):
+                for j in range(scan_from, bar_i):  # Exclude bar_i
                     if not found_break2 and closes[j] > sh0:
                         found_break2 = True
                     elif found_break2 and closes[j] < opens[j]:
                         w1_end_j = j
                         break
 
-                for j in range(w1_end_j + 1, bar_i + 1):
+                for j in range(w1_end_j + 1, bar_i):  # Exclude bar_i (MQL5: i >= 1)
                     rH, rL, rC = highs[j], lows[j], closes[j]
                     if pending_state == 1:
                         if pend_w1_trough is None or rL < pend_w1_trough:
@@ -364,7 +399,7 @@ def run_mst_medio(
             found_break = False
             scan_from = sl0_idx if sl0_idx is not None else confirmed_bar
 
-            for j in range(scan_from, bar_i + 1):
+            for j in range(scan_from, bar_i):  # Exclude bar_i (MQL5: i >= 1, excludes bar 0)
                 cl = closes[j]
                 op = opens[j]
                 hi = highs[j]
@@ -394,17 +429,17 @@ def run_mst_medio(
                 if debug:
                     print(f"  → Pending SELL, entry={sl0:.2f}, W1={w1_trough:.2f}, SL={pend_sl}")
 
-                # Retroactive scan
+                # Retroactive scan from W1 end to bar_i-1 (MQL5: retroFrom to bar 1)
                 w1_end_j = scan_from
                 found_break2 = False
-                for j in range(scan_from, bar_i + 1):
+                for j in range(scan_from, bar_i):  # Exclude bar_i
                     if not found_break2 and closes[j] < sl0:
                         found_break2 = True
                     elif found_break2 and closes[j] > opens[j]:
                         w1_end_j = j
                         break
 
-                for j in range(w1_end_j + 1, bar_i + 1):
+                for j in range(w1_end_j + 1, bar_i):  # Exclude bar_i (MQL5: i >= 1)
                     rH, rL, rC = highs[j], lows[j], closes[j]
                     if pending_state == -1:
                         if pend_w1_trough is None or rH > pend_w1_trough:
@@ -436,7 +471,8 @@ def run_mst_medio(
             if tp_mode == "confirm":
                 tp = conf_wave_high  # TP = high of confirm candle
             else:
-                tp = entry + fixed_rr * risk if risk > 0 else 0
+                # Fixed RR TP uses raw_risk (before buffer) — matches MQL5
+                tp = entry + fixed_rr * raw_risk if raw_risk > 0 else 0
 
             # R:R check
             reward = abs(tp - entry) if tp > 0 else 0
@@ -459,9 +495,12 @@ def run_mst_medio(
                     time=bar_time, direction="BUY", entry=entry, sl=sl_val, tp=tp,
                     w1_peak=pend_w1_peak, break_time=times[pend_break_idx] if pend_break_idx else bar_time,
                     confirm_time=bar_time, result=init_state, filled=not limit_order,
+                    orig_sl=sl_val,
                 )
                 signals.append(sig)
                 active_signal = sig
+                be_done = False
+                orig_sl = sl_val
 
         if confirmed_sell and pend_break_point is not None and pend_sl is not None:
             entry = pend_break_point
@@ -472,7 +511,8 @@ def run_mst_medio(
             if tp_mode == "confirm":
                 tp = conf_wave_low  # TP = low of confirm candle
             else:
-                tp = entry - fixed_rr * risk if risk > 0 else 0
+                # Fixed RR TP uses raw_risk (before buffer) — matches MQL5
+                tp = entry - fixed_rr * raw_risk if raw_risk > 0 else 0
 
             # R:R check
             reward = abs(entry - tp) if tp > 0 else 0
@@ -495,9 +535,12 @@ def run_mst_medio(
                     time=bar_time, direction="SELL", entry=entry, sl=sl_val, tp=tp,
                     w1_peak=pend_w1_peak, break_time=times[pend_break_idx] if pend_break_idx else bar_time,
                     confirm_time=bar_time, result=init_state, filled=not limit_order,
+                    orig_sl=sl_val,
                 )
                 signals.append(sig)
                 active_signal = sig
+                be_done = False
+                orig_sl = sl_val
 
         # ── Check limit order fill + TP/SL hit for active signal ──
         if active_signal is not None and active_signal.result in ("PENDING", "OPEN"):
@@ -542,34 +585,52 @@ def run_mst_medio(
                         if debug:
                             print(f"  [{bar_time}] ✗ SELL LIMIT: SL hit before fill")
 
-            # --- OPEN (filled): Check TP/SL ---
+            # --- OPEN (filled): Check TP/SL + Breakeven ---
             if active_signal is not None and active_signal.result == "OPEN":
+                risk_dist = abs(active_signal.entry - active_signal.orig_sl)  # Original risk distance
+
                 if active_signal.direction == "BUY":
+                    # Check SL hit first (SL priority)
                     if bar_low <= active_signal.sl:
                         active_signal.result = "SL"
-                        active_signal.pnl_r = -1.0
+                        active_signal.pnl_r = (active_signal.sl - active_signal.entry) / risk_dist if risk_dist > 0 else -1.0
                         active_signal = None
                     elif active_signal.tp > 0 and bar_high >= active_signal.tp:
-                        rr_actual = abs(active_signal.tp - active_signal.entry) / abs(active_signal.entry - active_signal.sl)
+                        rr_actual = abs(active_signal.tp - active_signal.entry) / risk_dist if risk_dist > 0 else 0
                         active_signal.result = "TP"
                         active_signal.pnl_r = rr_actual
                         active_signal = None
+                    elif not be_done and be_at_r > 0 and risk_dist > 0:
+                        # Check if profit reached BE threshold
+                        if (bar_high - active_signal.entry) >= be_at_r * risk_dist:
+                            active_signal.sl = active_signal.entry  # Move SL to breakeven
+                            be_done = True
+                            if debug:
+                                print(f"  [{bar_time}] ✓ BE moved: SL → {active_signal.entry:.2f}")
                 else:
                     if bar_high >= active_signal.sl:
                         active_signal.result = "SL"
-                        active_signal.pnl_r = -1.0
+                        active_signal.pnl_r = (active_signal.entry - active_signal.sl) / risk_dist if risk_dist > 0 else -1.0
                         active_signal = None
                     elif active_signal.tp > 0 and bar_low <= active_signal.tp:
-                        rr_actual = abs(active_signal.entry - active_signal.tp) / abs(active_signal.sl - active_signal.entry)
+                        rr_actual = abs(active_signal.entry - active_signal.tp) / risk_dist if risk_dist > 0 else 0
                         active_signal.result = "TP"
                         active_signal.pnl_r = rr_actual
                         active_signal = None
+                    elif not be_done and be_at_r > 0 and risk_dist > 0:
+                        # Check if profit reached BE threshold
+                        if (active_signal.entry - bar_low) >= be_at_r * risk_dist:
+                            active_signal.sl = active_signal.entry  # Move SL to breakeven
+                            be_done = True
+                            if debug:
+                                print(f"  [{bar_time}] ✓ BE moved: SL → {active_signal.entry:.2f}")
 
     return signals, swings
 
 
 def _calc_pnl_r(signal: Signal, close_price: float) -> float:
-    risk = abs(signal.entry - signal.sl)
+    # Use orig_sl for risk distance (SL may have moved to entry via BE)
+    risk = abs(signal.entry - signal.orig_sl) if signal.orig_sl != 0 else abs(signal.entry - signal.sl)
     if risk == 0:
         return 0
     if signal.direction == "BUY":
@@ -584,7 +645,7 @@ def signals_to_dataframe(signals: List[Signal]) -> pd.DataFrame:
     records = []
     fmt = "%Y-%m-%d %H:%M"
     for s in signals:
-        risk = abs(s.entry - s.sl)
+        risk = abs(s.entry - s.orig_sl) if s.orig_sl != 0 else abs(s.entry - s.sl)
         reward = abs(s.tp - s.entry) if s.tp > 0 else 0
         rr = reward / risk if risk > 0 else 0
         records.append({
