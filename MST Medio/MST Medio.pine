@@ -1,30 +1,35 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
 // Indicator : MST Medio (Make Simple Trading by Medio)
-// Version   : v2.0
-// Author    : Medio
+// Version   : v1.3
+// Author    : Tuan
 // Purpose   : 2-Step Breakout Confirmation System
 //             1. Detect HH/LL breakout (with impulse body filter)
 //             2. Find W1 Peak (first impulse wave extreme after break)
 //             3. Wait for CLOSE beyond W1 Peak → Confirmed! → Signal
 //             4. Entry = old SH/SL, SL = swing opposite
 //             5. TP = Confirm Break candle H/L (W1 Peak area)
+//             6. HTF trend note on Entry label (same/counter trend)
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
-     title      = "MST Medio v2.0",
+     title      = "MST Medio v1.3",
      shorttitle = "MST Medio",
      overlay    = true,
-     max_labels_count = 500,
-     max_lines_count  = 500,
-     max_boxes_count  = 500
+     max_labels_count = 200,
+     max_lines_count  = 200,
+     max_boxes_count  = 200
 )
 
 // ============================================================================
 // A) INPUTS
 // ============================================================================
+string GRP_PERF   = "Performance"
 string GRP_SIGNAL = "Signal Detection"
 string GRP_VIS    = "Visual"
+
+calcBars   = input.int(5000, "Calc Bars Limit", minval = 500, maxval = 50000, step = 500, group = GRP_PERF,
+             tooltip = "Only calculate signals on the most recent N bars. Lower = faster. Set higher if you need more history.")
 
 pivotLen   = input.int(5,   "Pivot Lookback", minval = 2, maxval = 50, group = GRP_SIGNAL,
              tooltip = "Number of bars left and right to confirm a Swing High/Low pivot point.")
@@ -44,6 +49,8 @@ showBoxes      = input.bool(true,  "Show Risk/Reward Zones",  group = GRP_VIS,
 
 showPending    = input.bool(true,  "Show Pending State",      group = GRP_VIS,
                  tooltip = "Show Entry line and W1 Peak/Trough line while waiting for confirmation.")
+showHTFNote    = input.bool(true,  "Show HTF Trend Note",     group = GRP_VIS,
+                 tooltip = "Show whether entry is with or against the higher timeframe trend on the Entry label.")
 
 colBreakUp   = input.color(color.new(#26a69a, 0),  "Break UP Color",     group = GRP_VIS)
 colBreakDown = input.color(color.new(#ef5350, 0),   "Break DOWN Color",   group = GRP_VIS)
@@ -55,12 +62,97 @@ colSwingHigh = input.color(color.new(color.orange, 40), "Swing High Color",  gro
 colSwingLow  = input.color(color.new(color.blue, 40),   "Swing Low Color",   group = GRP_VIS)
 
 // ============================================================================
-// B) CORE LOGIC
+// B) HTF TREND DETECTION
 // ============================================================================
 
+// -- Map current timeframe to higher timeframe --
+f_htfTF() =>
+    string _tf = timeframe.period
+    switch _tf
+        "1"   => "5"
+        "5"   => "15"
+        "15"  => "60"
+        "30"  => "120"
+        "60"  => "240"
+        "120" => "D"
+        "240" => "D"
+        "D"   => "W"
+        "W"   => "M"
+        => // Default: 4x multiplier
+            int _mins = timeframe.in_seconds() / 60
+            str.tostring(_mins * 4)
+
+f_htfLabel() =>
+    string _tf = timeframe.period
+    switch _tf
+        "1"   => "M5"
+        "5"   => "M15"
+        "15"  => "H1"
+        "30"  => "H2"
+        "60"  => "H4"
+        "120" => "D"
+        "240" => "D"
+        "D"   => "W"
+        "W"   => "M"
+        => "HTF"
+
+string htfTF    = f_htfTF()
+string htfLabel = f_htfLabel()
+
+// -- HTF Trend Detection (computed entirely on HTF context) --
+// Must run all var tracking inside request.security so pivots are counted once per HTF bar
+f_calcHTFTrend() =>
+    float _sh = ta.pivothigh(high, pivotLen, pivotLen)
+    float _sl = ta.pivotlow(low,  pivotLen, pivotLen)
+    var float _sh1 = na
+    var float _sh0 = na
+    var float _sl1 = na
+    var float _sl0 = na
+    if not na(_sh)
+        _sh0 := _sh1
+        _sh1 := _sh
+    if not na(_sl)
+        _sl0 := _sl1
+        _sl1 := _sl
+    // 1 = uptrend (HH), -1 = downtrend (LL), 0 = neutral
+    int _trend = not na(_sh1) and not na(_sh0) and _sh1 > _sh0 ? 1 :
+                 not na(_sl1) and not na(_sl0) and _sl1 < _sl0 ? -1 : 0
+    _trend
+
+int htfTrend = request.security(syminfo.tickerid, htfTF, f_calcHTFTrend())
+
+// -- Build HTF note string for Entry label --
+f_htfNote(int _signalDir) =>
+    if not showHTFNote
+        ""
+    else
+        string _note = ""
+        if _signalDir == 1  // BUY signal
+            if htfTrend == 1
+                _note := "\n✓ Same " + htfLabel + " trend"
+            else if htfTrend == -1
+                _note := "\n✗ Counter " + htfLabel + " trend"
+            else
+                _note := "\n~ " + htfLabel + " unclear"
+        else if _signalDir == -1  // SELL signal
+            if htfTrend == -1
+                _note := "\n✓ Same " + htfLabel + " trend"
+            else if htfTrend == 1
+                _note := "\n✗ Counter " + htfLabel + " trend"
+            else
+                _note := "\n~ " + htfLabel + " unclear"
+        _note
+
+// ============================================================================
+// C) CORE LOGIC
+// ============================================================================
+
+// -- Performance: skip old bars --
+bool _inRange = bar_index >= (last_bar_index - calcBars)
+
 // -- Swing Detection --
-swingHigh = ta.pivothigh(high, pivotLen, pivotLen)
-swingLow  = ta.pivotlow(low,  pivotLen, pivotLen)
+swingHigh = _inRange ? ta.pivothigh(high, pivotLen, pivotLen) : float(na)
+swingLow  = _inRange ? ta.pivotlow(low,  pivotLen, pivotLen) : float(na)
 
 // -- Track Swing History --
 var float sh1     = na      // Most recent Swing High
@@ -543,7 +635,7 @@ if confirmedBuy
         activeRewardBox  := na
 
         // Labels
-        label.new(bar_index, confEntry, "Entry",
+        label.new(bar_index, confEntry, "Entry" + f_htfNote(1),
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntryBuy,
              textcolor = color.white, size = size.tiny)
@@ -610,7 +702,7 @@ if confirmedSell
         activeRewardBox  := na
 
         // Labels
-        label.new(bar_index, confEntry, "Entry",
+        label.new(bar_index, confEntry, "Entry" + f_htfNote(-1),
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntrySell,
              textcolor = color.white, size = size.tiny)
