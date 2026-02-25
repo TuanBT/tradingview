@@ -1,0 +1,171 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// © tradingview
+//@version=5
+indicator("Candle Counter Signal [v1.3]", overlay=true, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════
+// INPUTS
+// ══════════════════════════════════════════════════════════════════
+grp1 = "── Candle Filter"
+minBodyPct  = input.float(0.0,  "Min Body % (0 = off)",  group=grp1, minval=0, maxval=100, step=1)
+minATRMult  = input.float(0.0,  "Min Range × ATR (0 = off)", group=grp1, minval=0, step=0.1)
+atrLen      = input.int(14,     "ATR Length",            group=grp1, minval=1)
+
+grp2 = "── EMA Trend Filter"
+useEMA      = input.bool(true,  "Enable EMA Filter",     group=grp2)
+emaPeriod   = input.int(50,     "EMA Period",            group=grp2, minval=1)
+
+grp3 = "── ADX Regime Filter"
+useADX      = input.bool(true,  "Enable ADX Filter",     group=grp3)
+adxPeriod   = input.int(14,     "ADX Period",            group=grp3, minval=1)
+adxMin      = input.float(25.0, "ADX Min Value",         group=grp3, minval=0)
+
+grp4 = "── Display"
+showSL      = input.bool(true,  "Show SL level",         group=grp4)
+showBarCol  = input.bool(true,  "Highlight signal bars", group=grp4)
+showLabels  = input.bool(true,  "Show BUY/SELL labels",  group=grp4)
+
+// ══════════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════════
+isBull(s) => close[s] > open[s]
+isRed(s)  => close[s] < open[s]
+
+// Body ratio: |close-open| / (high-low) >= minBodyPct%
+bodyOK(s) =>
+    if minBodyPct > 0
+        rng = high[s] - low[s]
+        body = math.abs(close[s] - open[s])
+        rng > 0.0 and (body / rng * 100.0) >= minBodyPct
+    else
+        true
+
+// ATR range filter: (high-low) >= minATRMult × ATR
+atrVal = ta.atr(atrLen)
+atrOK(s) =>
+    if minATRMult > 0
+        (high[s] - low[s]) >= minATRMult * atrVal[s]
+    else
+        true
+
+// ══════════════════════════════════════════════════════════════════
+// 3-CANDLE DETECTION  (same as EA: checks bar[1], bar[2], bar[3])
+// When called on bar[0], this outputs whether bar[0] is the ENTRY bar.
+// ══════════════════════════════════════════════════════════════════
+candleOK(s) => bodyOK(s) and atrOK(s)
+
+threeGreen = isBull(1) and isBull(2) and isBull(3) and
+             candleOK(1) and candleOK(2) and candleOK(3)
+
+threeRed   = isRed(1) and isRed(2) and isRed(3) and
+             candleOK(1) and candleOK(2) and candleOK(3)
+
+// ══════════════════════════════════════════════════════════════════
+// EMA FILTER
+// ══════════════════════════════════════════════════════════════════
+emaVal      = ta.ema(close, emaPeriod)
+emaOKBuy    = not useEMA or close[1] > emaVal[1]
+emaOKSell   = not useEMA or close[1] < emaVal[1]
+
+// ══════════════════════════════════════════════════════════════════
+// ADX FILTER
+// ══════════════════════════════════════════════════════════════════
+[diPlus, diMinus, adxVal] = ta.dmi(adxPeriod, adxPeriod)
+adxOK = not useADX or adxVal[1] >= adxMin
+
+// ══════════════════════════════════════════════════════════════════
+// FINAL SIGNAL
+// ══════════════════════════════════════════════════════════════════
+buySignal  = threeGreen and emaOKBuy  and adxOK
+sellSignal = threeRed   and emaOKSell and adxOK
+
+// SL level = wick of 1st signal candle (bar[3])
+slBuy  = low[3]   // 1st (oldest) signal candle low
+slSell = high[3]  // 1st (oldest) signal candle high
+
+// ══════════════════════════════════════════════════════════════════
+// PLOTS
+// ══════════════════════════════════════════════════════════════════
+
+// EMA line
+plot(useEMA ? emaVal : na, "EMA",
+     color=color.new(color.orange, 0), linewidth=2)
+
+// ── Bar coloring: color entry bar + 3 signal bars ─────────────────
+// buySignal[0]  → current bar is entry → signal candles at [1],[2],[3]
+// buySignal[1]  → previous bar was entry → signal candle 1 is current bar
+// buySignal[2]  → signal candle 2 is current bar
+// buySignal[3]  → signal candle 3 is current bar
+isBuyEntry   = buySignal
+isBuyC1      = buySignal[1]   // most recent signal candle
+isBuyC2      = buySignal[2]
+isBuyC3      = buySignal[3]
+
+isSellEntry  = sellSignal
+isSellC1     = sellSignal[1]
+isSellC2     = sellSignal[2]
+isSellC3     = sellSignal[3]
+
+colGreenEntry = color.new(color.lime, 20)
+colGreenSig   = color.new(color.teal, 55)
+colRedEntry   = color.new(color.red, 20)
+colRedSig     = color.new(color.maroon, 55)
+
+barcolor(showBarCol and isBuyEntry  ? colGreenEntry :
+         showBarCol and isBuyC1     ? colGreenSig   :
+         showBarCol and isBuyC2     ? colGreenSig   :
+         showBarCol and isBuyC3     ? colGreenSig   :
+         showBarCol and isSellEntry ? colRedEntry   :
+         showBarCol and isSellC1    ? colRedSig     :
+         showBarCol and isSellC2    ? colRedSig     :
+         showBarCol and isSellC3    ? colRedSig     : na)
+
+// ── Arrows below/above entry bar ──────────────────────────────────
+plotshape(showLabels and buySignal,  "BUY",  shape.triangleup,
+          location.belowbar, color.lime, size=size.small, text="▲BUY")
+plotshape(showLabels and sellSignal, "SELL", shape.triangledown,
+          location.abovebar, color.red,  size=size.small, text="▼SELL")
+
+// ── SL level line from signal bar ─────────────────────────────────
+// Draw a short horizontal line at SL price for each signal
+if showSL and buySignal
+    lnColor = color.new(color.red, 40)
+    label.new(bar_index, slBuy,
+              "SL " + str.tostring(slBuy, format.mintick),
+              style=label.style_label_right,
+              color=color.new(color.red, 70),
+              textcolor=color.white, size=size.tiny,
+              yloc=yloc.price)
+
+if showSL and sellSignal
+    label.new(bar_index, slSell,
+              "SL " + str.tostring(slSell, format.mintick),
+              style=label.style_label_right,
+              color=color.new(color.green, 70),
+              textcolor=color.white, size=size.tiny,
+              yloc=yloc.price)
+
+// ══════════════════════════════════════════════════════════════════
+// INFO TABLE  (top-right: shows active filters)
+// ══════════════════════════════════════════════════════════════════
+var table infoTbl = table.new(position.top_right, 2, 4,
+     bgcolor=color.new(color.black, 70), border_color=color.gray, border_width=1)
+
+if barstate.islast
+    table.cell(infoTbl, 0, 0, "Filter",    text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoTbl, 1, 0, "Status",    text_color=color.gray,  text_size=size.tiny)
+
+    table.cell(infoTbl, 0, 1, "EMA " + str.tostring(emaPeriod),
+               text_color=color.white, text_size=size.tiny)
+    table.cell(infoTbl, 1, 1, useEMA ? "ON" : "OFF",
+               text_color=useEMA ? color.lime : color.red, text_size=size.tiny)
+
+    table.cell(infoTbl, 0, 2, "ADX(" + str.tostring(adxPeriod) + ")>" + str.tostring(adxMin),
+               text_color=color.white, text_size=size.tiny)
+    table.cell(infoTbl, 1, 2, useADX ? "ON" : "OFF",
+               text_color=useADX ? color.lime : color.red, text_size=size.tiny)
+
+    table.cell(infoTbl, 0, 3, "Body≥" + str.tostring(minBodyPct) + "%",
+               text_color=color.white, text_size=size.tiny)
+    table.cell(infoTbl, 1, 3, minBodyPct > 0 ? "ON" : "OFF",
+               text_color=minBodyPct > 0 ? color.lime : color.red, text_size=size.tiny)

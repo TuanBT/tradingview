@@ -1,7 +1,7 @@
 //@version=6
 // ─────────────────────────────────────────────────────────────────────────────
 // Indicator : MST Medio (Make Simple Trading by Medio)
-// Version   : v1.3
+// Version   : v1.4
 // Author    : Tuan
 // Purpose   : 2-Step Breakout Confirmation System
 //             1. Detect HH/LL breakout (with impulse body filter)
@@ -13,7 +13,7 @@
 // Notes     : Works on all timeframes. Non-repainting (uses confirmed pivots).
 // ─────────────────────────────────────────────────────────────────────────────
 indicator(
-     title      = "MST Medio v1.3",
+     title      = "MST Medio v1.4",
      shorttitle = "MST Medio",
      overlay    = true,
      max_labels_count = 200,
@@ -121,27 +121,100 @@ f_calcHTFTrend() =>
 
 int htfTrend = request.security(syminfo.tickerid, htfTF, f_calcHTFTrend())
 
-// -- Build HTF note string for Entry label --
-f_htfNote(int _signalDir) =>
+// MTF trend values — declared here so f_htfNote() can use them
+int mtfTrend_m1  = request.security(syminfo.tickerid, "1",   f_calcHTFTrend())
+int mtfTrend_m5  = request.security(syminfo.tickerid, "5",   f_calcHTFTrend())
+int mtfTrend_m15 = request.security(syminfo.tickerid, "15",  f_calcHTFTrend())
+int mtfTrend_h1  = request.security(syminfo.tickerid, "60",  f_calcHTFTrend())
+int mtfTrend_h4  = request.security(syminfo.tickerid, "240", f_calcHTFTrend())
+int mtfTrend_d   = request.security(syminfo.tickerid, "D",   f_calcHTFTrend())
+int mtfTrend_w   = request.security(syminfo.tickerid, "W",   f_calcHTFTrend())
+
+// Wrap TF label with [ ] when it is the current chart TF
+f_wrapCur(string _s, bool _cur) => _cur ? "[" + _s + "]" : _s
+
+// -- Build MTF note string for Entry label (grouped by direction) --
+// Groups TFs into ▲ (up), ▼ (down), ─ (neutral) lines.
+// Current chart TF is wrapped with [ ].
+f_htfNote(int _signalDir, int _curTrend = 0) =>
     if not showHTFNote
         ""
     else
-        string _note = ""
-        if _signalDir == 1  // BUY signal
-            if htfTrend == 1
-                _note := "\n✓ Same " + htfLabel + " trend"
-            else if htfTrend == -1
-                _note := "\n✗ Counter " + htfLabel + " trend"
-            else
-                _note := "\n~ " + htfLabel + " unclear"
-        else if _signalDir == -1  // SELL signal
-            if htfTrend == -1
-                _note := "\n✓ Same " + htfLabel + " trend"
-            else if htfTrend == 1
-                _note := "\n✗ Counter " + htfLabel + " trend"
-            else
-                _note := "\n~ " + htfLabel + " unclear"
-        _note
+        int  _sec   = timeframe.in_seconds()
+        bool _isM1  = _sec == 60
+        bool _isM5  = _sec == 300
+        bool _isM15 = _sec == 900
+        bool _isH1  = _sec == 3600
+        bool _isH4  = _sec == 14400
+        bool _isD   = _sec == 86400
+        bool _isW   = _sec == 604800
+
+        // Pick correct trend per TF — use _curTrend for whichever TF is current
+        int _t_m1  = _isM1  ? _curTrend : mtfTrend_m1
+        int _t_m5  = _isM5  ? _curTrend : mtfTrend_m5
+        int _t_m15 = _isM15 ? _curTrend : mtfTrend_m15
+        int _t_h1  = _isH1  ? _curTrend : mtfTrend_h1
+        int _t_h4  = _isH4  ? _curTrend : mtfTrend_h4
+        int _t_d   = _isD   ? _curTrend : mtfTrend_d
+        int _t_w   = _isW   ? _curTrend : mtfTrend_w
+
+        // Collect TF names by direction
+        string _up = ""
+        string _dn = ""
+        string _nt = ""
+        if _t_m1 == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("M1",  _isM1)
+        else if _t_m1 == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("M1",  _isM1)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("M1",  _isM1)
+        if _t_m5 == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("M5",  _isM5)
+        else if _t_m5 == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("M5",  _isM5)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("M5",  _isM5)
+        if _t_m15 == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("M15", _isM15)
+        else if _t_m15 == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("M15", _isM15)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("M15", _isM15)
+        if _t_h1 == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("H1",  _isH1)
+        else if _t_h1 == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("H1",  _isH1)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("H1",  _isH1)
+        if _t_h4 == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("H4",  _isH4)
+        else if _t_h4 == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("H4",  _isH4)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("H4",  _isH4)
+        if _t_d == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("D",   _isD)
+        else if _t_d == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("D",   _isD)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("D",   _isD)
+        if _t_w == 1
+            _up += (_up == "" ? "" : " ") + f_wrapCur("W",   _isW)
+        else if _t_w == -1
+            _dn += (_dn == "" ? "" : " ") + f_wrapCur("W",   _isW)
+        else
+            _nt += (_nt == "" ? "" : " ") + f_wrapCur("W",   _isW)
+
+        // Build result: only show lines that have content
+        string _result = ""
+        if _up != ""
+            _result += "\n▲ " + _up
+        if _dn != ""
+            _result += "\n▼ " + _dn
+        if _nt != ""
+            _result += "\n─ " + _nt
+        _result
+
 
 // ============================================================================
 // C) CORE LOGIC
@@ -634,11 +707,16 @@ if confirmedBuy
         activeRiskBox    := na
         activeRewardBox  := na
 
+        // MTF trend for current TF (from existing sh1/sh0/sl1/sl0 — no extra request needed)
+        bool _isHH = not na(sh1) and not na(sh0) and sh1 > sh0
+        bool _isLL = not na(sl1) and not na(sl0) and sl1 < sl0
+        int _curTrend = _isHH ? 1 : _isLL ? -1 : 0
+
         // Labels
-        label.new(bar_index, confEntry, "Entry" + f_htfNote(1),
+        label.new(bar_index, confEntry, "Entry" + f_htfNote(1, _curTrend),
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntryBuy,
-             textcolor = color.white, size = size.tiny)
+             textcolor = color.white, size = size.small)
         label.new(bar_index, confSL, "SL",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colSL,
@@ -701,11 +779,16 @@ if confirmedSell
         activeRiskBox    := na
         activeRewardBox  := na
 
+        // MTF trend for current TF (reuse existing sh1/sh0/sl1/sl0)
+        bool _isHH = not na(sh1) and not na(sh0) and sh1 > sh0
+        bool _isLL = not na(sl1) and not na(sl0) and sl1 < sl0
+        int _curTrend = _isHH ? 1 : _isLL ? -1 : 0
+
         // Labels
-        label.new(bar_index, confEntry, "Entry" + f_htfNote(-1),
+        label.new(bar_index, confEntry, "Entry" + f_htfNote(-1, _curTrend),
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colEntrySell,
-             textcolor = color.white, size = size.tiny)
+             textcolor = color.white, size = size.small)
         label.new(bar_index, confSL, "SL",
              xloc = xloc.bar_index, yloc = yloc.price,
              style = label.style_label_left, color = colSL,
